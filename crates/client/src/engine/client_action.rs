@@ -1,3 +1,5 @@
+use windows::Win32::UI::TextServices::ITfRange;
+
 use super::input_mode::InputMode;
 
 #[derive(Debug, PartialEq)]
@@ -21,6 +23,11 @@ pub enum ClientAction {
     MoveSegmentBoundary(i32),
 
     SetIMEMode(InputMode),
+
+    // 確定済みの文字列（None なら選択範囲）を再変換する。文字列が無い・読みが分からなければ何もしない
+    StartReconversion(Option<ITfRange>),
+    // 再変換を取り消し、元の文字列に戻す。EndComposition の前に置く
+    RestoreReconversion,
 }
 
 #[derive(Debug, PartialEq)]

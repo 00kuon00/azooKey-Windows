@@ -48,6 +48,8 @@ pub struct Composition {
     pub candidates: Candidates,
     // F6〜F10 でひらがな・カタカナ・英数に置き換えて表示している（候補ではないので学習しない）
     pub converted_by_function_key: bool,
+    // 再変換中なら元の文字列（Escape でこれに戻す）。読みを打ち直したら None
+    pub reconversion_original: Option<String>,
 
     pub state: CompositionState,
     pub tip_composition: Option<ITfComposition>,
@@ -127,6 +129,11 @@ impl TextServiceFactory {
                         InputMode::Latin => ClientAction::SetIMEMode(InputMode::Kana),
                     }],
                 ),
+                // 選択範囲が無いときも Win+/ は受け取って何もしない
+                UserAction::Reconvert => (
+                    CompositionState::None,
+                    vec![ClientAction::StartReconversion(None)],
+                ),
                 _ => {
                     return Ok(None);
                 }
@@ -166,6 +173,13 @@ impl TextServiceFactory {
                         )
                     }
                 }
+                UserAction::Escape if composition.reconversion_original.is_some() => (
+                    CompositionState::None,
+                    vec![
+                        ClientAction::RestoreReconversion,
+                        ClientAction::EndComposition,
+                    ],
+                ),
                 UserAction::Escape => (
                     CompositionState::None,
                     vec![ClientAction::RemoveText, ClientAction::EndComposition],
@@ -268,6 +282,13 @@ impl TextServiceFactory {
                         )
                     }
                 }
+                UserAction::Escape if composition.reconversion_original.is_some() => (
+                    CompositionState::None,
+                    vec![
+                        ClientAction::RestoreReconversion,
+                        ClientAction::EndComposition,
+                    ],
+                ),
                 UserAction::Escape => (
                     CompositionState::None,
                     vec![ClientAction::RemoveText, ClientAction::EndComposition],
@@ -386,6 +407,7 @@ impl TextServiceFactory {
         let mut candidates = composition.candidates.clone();
         let mut selection_index = composition.selection_index;
         let mut converted_by_function_key = composition.converted_by_function_key;
+        let mut reconversion_original = composition.reconversion_original.clone();
         let mut ipc_service = IMEState::get()?
             .ipc_service
             .clone()
@@ -404,6 +426,7 @@ impl TextServiceFactory {
                 ClientAction::EndComposition => {
                     self.end_composition()?;
                     converted_by_function_key = false;
+                    reconversion_original = None;
                     selection_index = 0;
                     corresponding_count = 0;
                     preview.clear();
@@ -416,6 +439,7 @@ impl TextServiceFactory {
                 }
                 ClientAction::AppendText(text) => {
                     converted_by_function_key = false;
+                    reconversion_original = None;
                     raw_input.push_str(&text);
 
                     let text = match mode {
@@ -440,6 +464,7 @@ impl TextServiceFactory {
                 }
                 ClientAction::RemoveText => {
                     converted_by_function_key = false;
+                    reconversion_original = None;
                     candidates = ipc_service.remove_text()?;
                     let empty = "".to_string();
                     let text = candidates
@@ -552,6 +577,7 @@ impl TextServiceFactory {
                 }
                 ClientAction::ShrinkText(text) => {
                     converted_by_function_key = false;
+                    reconversion_original = None;
                     // shrink text
                     raw_input.push_str(&text);
                     raw_input = raw_input
@@ -628,6 +654,30 @@ impl TextServiceFactory {
 
                     self.set_text(&text, "")?;
                 }
+                ClientAction::StartReconversion(range) => {
+                    let Some(reconverted) =
+                        self.begin_reconversion(&mut ipc_service, range.as_ref())?
+                    else {
+                        continue;
+                    };
+                    preview = reconverted.preview;
+                    suffix = reconverted.suffix;
+                    raw_input = reconverted.raw_input;
+                    raw_hiragana = reconverted.raw_hiragana;
+                    corresponding_count = reconverted.corresponding_count;
+                    selection_index = reconverted.selection_index;
+                    candidates = reconverted.candidates;
+                    converted_by_function_key = reconverted.converted_by_function_key;
+                    reconversion_original = reconverted.reconversion_original;
+                    transition = reconverted.state;
+                }
+                ClientAction::RestoreReconversion => {
+                    if let Some(original) = &reconversion_original {
+                        self.set_text(original, "")?;
+                        preview = original.clone();
+                        suffix.clear();
+                    }
+                }
             }
         }
 
@@ -643,6 +693,7 @@ impl TextServiceFactory {
         composition.suffix = suffix.clone();
         composition.corresponding_count = corresponding_count;
         composition.converted_by_function_key = converted_by_function_key;
+        composition.reconversion_original = reconversion_original;
 
         Ok(())
     }
