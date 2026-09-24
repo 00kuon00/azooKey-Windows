@@ -7,7 +7,8 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # Swift 6.1.2 の clang 19 は VS 18 の MSVC 14.51（Clang 20 以上を要求）で STL1000 になるため VS 2022 に固定する
+    runs-on: windows-2022
 
     steps:
     - uses: actions/checkout@v4
