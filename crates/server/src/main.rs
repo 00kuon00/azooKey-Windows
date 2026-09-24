@@ -248,7 +248,8 @@ impl AzookeyService for MyAzookeyService {
     }
 }
 
-#[tokio::main]
+// Swift 側の FFI 関数は @MainActor なので、tonic のハンドラを 1 本のスレッドで動かす
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("AzookeyServer started");
     // get executable directory
