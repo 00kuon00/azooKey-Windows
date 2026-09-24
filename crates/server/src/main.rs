@@ -39,6 +39,29 @@ unsafe extern "C" {
     fn LoadConfig();
     fn CommitCandidate(text: *const c_char);
     fn ResetLearning();
+    fn GetUnregisteredUserDictionaryEntries() -> *mut c_char;
+}
+
+#[derive(serde::Deserialize)]
+struct RawUserDictionaryEntry {
+    reading: String,
+    word: String,
+}
+
+/// 直近のユーザー辞書の作り直しで登録できなかった語（Swift 側は JSON で返す）
+fn unregistered_user_dictionary_entries() -> Vec<shared::proto::UserDictionaryEntry> {
+    let json = unsafe {
+        let result = GetUnregisteredUserDictionaryEntries();
+        CStr::from_ptr(result).to_string_lossy().into_owned()
+    };
+    serde_json::from_str::<Vec<RawUserDictionaryEntry>>(&json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| shared::proto::UserDictionaryEntry {
+            reading: entry.reading,
+            word: entry.word,
+        })
+        .collect()
 }
 
 fn initialize(path: &str) {
@@ -245,8 +268,11 @@ impl AzookeyService for MyAzookeyService {
         &self,
         _: Request<shared::proto::UpdateConfigRequest>,
     ) -> Result<Response<shared::proto::UpdateConfigResponse>, Status> {
+        // LoadConfig はユーザー辞書も（元データが変わっていれば）作り直す
         unsafe { LoadConfig() };
-        Ok(Response::new(shared::proto::UpdateConfigResponse {}))
+        Ok(Response::new(shared::proto::UpdateConfigResponse {
+            unregistered_user_dictionary_entries: unregistered_user_dictionary_entries(),
+        }))
     }
 
     async fn commit_candidate(
