@@ -32,6 +32,8 @@ let package = Package(
             name: "azookey-server",
             dependencies: [
                 .product(name: "KanaKanjiConverterModule", package: "azookeykanakanjiconverter"),
+                // ユーザー辞書の読みをカタカナにする（toKatakana）
+                .product(name: "SwiftUtils", package: "azookeykanakanjiconverter"),
                 "ffi"
             ],
             // Zenzai トレイトの変換モジュールは C++ 相互運用でビルドされるため、利用側も合わせる
