@@ -37,6 +37,8 @@ unsafe extern "C" {
     fn ClearText();
     fn GetComposedText(lengthPtr: *mut c_int) -> *mut *mut FFICandidate;
     fn LoadConfig();
+    fn CommitCandidate(text: *const c_char);
+    fn ResetLearning();
 }
 
 fn initialize(path: &str) {
@@ -245,6 +247,24 @@ impl AzookeyService for MyAzookeyService {
     ) -> Result<Response<shared::proto::UpdateConfigResponse>, Status> {
         unsafe { LoadConfig() };
         Ok(Response::new(shared::proto::UpdateConfigResponse {}))
+    }
+
+    async fn commit_candidate(
+        &self,
+        request: Request<shared::proto::CommitCandidateRequest>,
+    ) -> Result<Response<shared::proto::CommitCandidateResponse>, Status> {
+        let text = request.into_inner().text;
+        let text = CString::new(text).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        unsafe { CommitCandidate(text.as_ptr()) };
+        Ok(Response::new(shared::proto::CommitCandidateResponse {}))
+    }
+
+    async fn reset_learning(
+        &self,
+        _: Request<shared::proto::ResetLearningRequest>,
+    ) -> Result<Response<shared::proto::ResetLearningResponse>, Status> {
+        unsafe { ResetLearning() };
+        Ok(Response::new(shared::proto::ResetLearningResponse {}))
     }
 }
 

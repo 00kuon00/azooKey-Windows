@@ -66,6 +66,16 @@ message SetContextResponse {}
 message UpdateConfigRequest {}
 message UpdateConfigResponse {}
 
+// 候補が確定したことを伝える（学習に使う）
+message CommitCandidateRequest {
+  string text = 1; // 確定した候補の文字列（Suggestion.text）
+}
+message CommitCandidateResponse {}
+
+// 学習をすべて消す
+message ResetLearningRequest {}
+message ResetLearningResponse {}
+
 
 // Service definition for text editing operations.
 service AzookeyService {
@@ -76,4 +86,6 @@ service AzookeyService {
   rpc ClearText (ClearTextRequest) returns (ClearTextResponse);
   rpc SetContext (SetContextRequest) returns (SetContextResponse);
   rpc UpdateConfig (UpdateConfigRequest) returns (UpdateConfigResponse);
+  rpc CommitCandidate (CommitCandidateRequest) returns (CommitCandidateResponse);
+  rpc ResetLearning (ResetLearningRequest) returns (ResetLearningResponse);
 }

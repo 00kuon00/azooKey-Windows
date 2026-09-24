@@ -12,6 +12,29 @@ import ffi
     "profile": "",
 ]
 
+// 学習の設定（settings.json の learning.mode）。既定は学習する
+@MainActor var learningType: LearningType = .inputAndOutput
+// 学習の保存先。%APPDATA%\Azookey\memory（テストでは差し替える）
+@MainActor var memoryDirectoryURL: URL = defaultMemoryDirectoryURL()
+// 直近の GetComposedText で返した候補。確定の知らせ（CommitCandidate）を受けたとき、表示文字列から Candidate を引く
+@MainActor var lastCandidates: [(text: String, candidate: Candidate)] = []
+
+func defaultMemoryDirectoryURL() -> URL {
+    let appData = ProcessInfo.processInfo.environment["APPDATA"] ?? "."
+    return URL(filePath: appData)
+        .appendingPathComponent("Azookey")
+        .appendingPathComponent("memory", isDirectory: true)
+}
+
+func parseLearningType(_ mode: String) -> LearningType? {
+    switch mode {
+    case "inputAndOutput": return .inputAndOutput
+    case "onlyOutput": return .onlyOutput
+    case "nothing": return .nothing
+    default: return nil
+    }
+}
+
 @MainActor func getOptions(context: String = "") -> ConvertRequestOptions {
     return ConvertRequestOptions(
         // 予測候補は constructCandidateString で入力の長さに切られ、ひらがなの重複としてしか出ない。
@@ -19,8 +42,8 @@ import ffi
         requireJapanesePrediction: .disabled,
         requireEnglishPrediction: .disabled,
         keyboardLanguage: .ja_JP,
-        learningType: .nothing,
-        memoryDirectoryURL: URL(filePath: "./test"),
+        learningType: learningType,
+        memoryDirectoryURL: memoryDirectoryURL,
         sharedContainerURL: URL(filePath: "./test"),
         textReplacer: .init {
             return execURL.appendingPathComponent("EmojiDictionary").appendingPathComponent("emoji_all_E15.1.txt")
@@ -82,8 +105,8 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
         
         do {
             let data = try Data(contentsOf: settingsPath)
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let zenzaiDict = json["zenzai"] as? [String: Any] {
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if let zenzaiDict = json?["zenzai"] as? [String: Any] {
                 
                 if let enableValue = zenzaiDict["enable"] as? Bool {
                     config["enable"] = enableValue
@@ -93,6 +116,10 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
                     config["profile"] = profileValue
                 }
             }
+
+            // learning が無い（古い settings.json）ときは既定の「学習する」
+            let learningDict = json?["learning"] as? [String: Any]
+            learningType = (learningDict?["mode"] as? String).flatMap(parseLearningType) ?? .inputAndOutput
         } catch {
             print("Failed to read settings: \(error)")
         }
@@ -156,6 +183,9 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
 @_silgen_name("ClearText")
 @MainActor public func clear_text() {
     composingText = ComposingText()
+    lastCandidates = []
+    // 入力の区切り。前の入力で確定した語を、次の入力の学習の「直前の語」に持ち越さない
+    converter.stopComposition()
 }
 
 func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
@@ -196,11 +226,14 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
     let options = getOptions(context: contextString)
     let converted = converter.requestCandidates(composingText, options: options)
     var result: [FFICandidate] = []
+    lastCandidates = []
 
     for i in 0..<converted.mainResults.count {
         let candidate = converted.mainResults[i]
 
-        let text = strdup(constructCandidateString(candidate: candidate, hiragana: hiragana))
+        let candidateString = constructCandidateString(candidate: candidate, hiragana: hiragana)
+        lastCandidates.append((candidateString, candidate))
+        let text = strdup(candidateString)
         let hiragana = strdup(hiragana)
 
         let (correspondingCount, remaining) = inputCount(of: candidate)
@@ -231,4 +264,47 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
 ) {
     let contextString = String(cString: context)
     config["context"] = contextString
+}
+
+/// 英数・記号だけの確定（全角の英数を含む）は学習しない
+func shouldLearn(_ text: String) -> Bool {
+    let isAlphanumericOnly = text.unicodeScalars.allSatisfy { scalar in
+        scalar.isASCII
+            || (0xFF01...0xFF5E).contains(scalar.value) // 全角の英数・記号
+            || scalar.value == 0x3000 // 全角スペース
+    }
+    return !text.isEmpty && !isAlphanumericOnly
+}
+
+/// 候補が確定したことを受け取り、学習する。
+/// `text` はクライアントに返した候補の文字列。クライアント（Rust）は同じ文字列の候補を最初の 1 件だけ残すので、
+/// ここでも最初に一致したものを取る
+@_silgen_name("CommitCandidate")
+@MainActor public func commit_candidate(text: UnsafePointer<CChar>) {
+    let text = String(cString: text)
+    // 「新しく学習しない」「学習しない」では学習の保存先に書き込まない
+    guard learningType == .inputAndOutput, shouldLearn(text) else {
+        return
+    }
+    guard let candidate = lastCandidates.first(where: { $0.text == text })?.candidate else {
+        print("CommitCandidate: candidate not found: \(text)")
+        return
+    }
+
+    do {
+        try FileManager.default.createDirectory(at: memoryDirectoryURL, withIntermediateDirectories: true)
+    } catch {
+        print("Failed to create memory directory: \(error)")
+        return
+    }
+    converter.updateLearningData(candidate)
+    converter.commitUpdateLearningData()
+}
+
+/// 学習をすべて消す
+@_silgen_name("ResetLearning")
+@MainActor public func reset_learning() {
+    // resetMemory は直近の変換で渡した保存先（Initialize で一度変換しているので必ずある）を消す
+    converter.resetMemory()
+    converter.stopComposition()
 }
