@@ -19,7 +19,7 @@ use super::{
 use windows::Win32::{
     Foundation::WPARAM,
     UI::{
-        Input::KeyboardAndMouse::{VK_CONTROL, VK_DELETE},
+        Input::KeyboardAndMouse::VK_CONTROL,
         TextServices::{ITfComposition, ITfCompositionSink_Impl, ITfContext},
     },
 };
@@ -81,10 +81,15 @@ impl TextServiceFactory {
             return Ok(None);
         };
 
-        // check shortcut keys（Ctrl+Delete だけは候補の学習を忘れる操作として受ける）
-        if VK_CONTROL.is_pressed() && wparam.0 != VK_DELETE.0 as usize {
-            return Ok(None);
-        }
+        // check shortcut keys (Ctrl+Space・Ctrl+Delete だけは IME で受ける)
+        let control_action = if VK_CONTROL.is_pressed() {
+            match UserAction::from_control_key(wparam.0) {
+                Some(action) => Some(action),
+                None => return Ok(None),
+            }
+        } else {
+            None
+        };
 
         #[allow(clippy::let_and_return)]
         let (composition, mode) = {
@@ -94,7 +99,10 @@ impl TextServiceFactory {
             (composition, mode)
         };
 
-        let action = UserAction::try_from(wparam.0)?;
+        let action = match control_action {
+            Some(action) => action,
+            None => UserAction::try_from(wparam.0)?,
+        };
 
         let (transition, actions) = match composition.state {
             CompositionState::None => match action {

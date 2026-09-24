@@ -1,7 +1,7 @@
 use crate::extension::VKeyExt;
 use anyhow::{Context, Result};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardState, ToUnicode, VK_CONTROL, VK_SHIFT,
+    GetKeyboardState, ToUnicode, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 
 #[derive(Debug)]
@@ -107,5 +107,20 @@ impl TryFrom<usize> for UserAction {
         };
 
         Ok(action)
+    }
+}
+
+impl UserAction {
+    /// Ctrl を押しながらのキーのうち IME で受けるもの。ほかの Ctrl の組み合わせはアプリのショートカットなので None
+    pub fn from_control_key(key_code: usize) -> Option<UserAction> {
+        match key_code {
+            // Ctrl+Space: 日本語 / 英字の切り替え（半角/全角キーの無い英語配列向け）
+            0x20 if !VK_SHIFT.is_pressed() && !VK_MENU.is_pressed() => {
+                Some(UserAction::ToggleInputMode)
+            }
+            // Ctrl+Delete: 選んでいる候補の学習を忘れる（候補を選んでいないときはアプリへ渡す）
+            0x2E => Some(UserAction::Forget),
+            _ => None,
+        }
     }
 }
