@@ -210,6 +210,42 @@ impl IPCService {
         Ok(())
     }
 
+    // 候補の学習だけを忘れさせ、取り直した候補を返す
+    #[tracing::instrument]
+    pub fn forget_candidate(&mut self, text: String) -> anyhow::Result<Candidates> {
+        let request = tonic::Request::new(shared::proto::ForgetCandidateRequest { text });
+        let response = self
+            .runtime
+            .clone()
+            .block_on(self.azookey_client.forget_candidate(request))?;
+        let composing_text = response.into_inner().composing_text;
+
+        let candidates = if let Some(composing_text) = composing_text {
+            Candidates {
+                texts: composing_text
+                    .suggestions
+                    .iter()
+                    .map(|s| s.text.clone())
+                    .collect(),
+                sub_texts: composing_text
+                    .suggestions
+                    .iter()
+                    .map(|s| s.subtext.clone())
+                    .collect(),
+                hiragana: composing_text.hiragana,
+                corresponding_count: composing_text
+                    .suggestions
+                    .iter()
+                    .map(|s| s.corresponding_count)
+                    .collect(),
+            }
+        } else {
+            anyhow::bail!("composing_text is None");
+        };
+
+        Ok(candidates)
+    }
+
     pub fn set_context(&mut self, context: String) -> anyhow::Result<()> {
         let request = tonic::Request::new(shared::proto::SetContextRequest { context });
         let _response = self

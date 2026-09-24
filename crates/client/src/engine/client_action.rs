@@ -10,6 +10,8 @@ pub enum ClientAction {
     ShrinkText(String),
     // 表示中の候補を確定したことをサーバへ伝える（学習）。EndComposition / ShrinkText の前に置く
     CommitCandidate,
+    // 表示中の候補の学習だけを忘れさせ、候補を取り直す（候補選択中の Ctrl+Delete）
+    ForgetCandidate,
 
     SetTextWithType(SetTextType),
 
