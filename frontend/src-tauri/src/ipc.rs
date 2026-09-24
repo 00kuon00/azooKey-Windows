@@ -48,13 +48,23 @@ impl IPCService {
 
 // implement methods to interact with kkc server
 impl IPCService {
-    pub fn update_config(&mut self) -> anyhow::Result<()> {
+    /// 設定とユーザー辞書を読み直させる。返り値はユーザー辞書に登録できなかった語
+    pub fn update_config(&mut self) -> anyhow::Result<Vec<shared::UserDictionaryEntry>> {
         let request = tonic::Request::new(shared::proto::UpdateConfigRequest {});
-        self.runtime
+        let response = self
+            .runtime
             .clone()
             .block_on(self.azookey_client.update_config(request))?;
 
-        Ok(())
+        Ok(response
+            .into_inner()
+            .unregistered_user_dictionary_entries
+            .into_iter()
+            .map(|entry| shared::UserDictionaryEntry {
+                reading: entry.reading,
+                word: entry.word,
+            })
+            .collect())
     }
 
     pub fn reset_learning(&mut self) -> anyhow::Result<()> {
