@@ -2,7 +2,8 @@ import KanaKanjiConverterModule
 import Foundation
 import ffi
 
-@MainActor let converter = KanaKanjiConverter()
+// 辞書の場所は変換器の生成時に渡すので、Initialize で execURL が決まってから作る
+@MainActor var converter: KanaKanjiConverter!
 @MainActor var composingText = ComposingText()
 
 @MainActor var execURL = URL(filePath: "")
@@ -13,16 +14,18 @@ import ffi
 
 @MainActor func getOptions(context: String = "") -> ConvertRequestOptions {
     return ConvertRequestOptions(
-        requireJapanesePrediction: true,
-        requireEnglishPrediction: false,
+        // 予測候補は constructCandidateString で入力の長さに切られ、ひらがなの重複としてしか出ない。
+        // 新しいエンジンは .autoMix だとそれを 1 位に置くため、旧版と同じ 1 位を保つよう生成しない
+        requireJapanesePrediction: .disabled,
+        requireEnglishPrediction: .disabled,
         keyboardLanguage: .ja_JP,
         learningType: .nothing,
-        dictionaryResourceURL: execURL.appendingPathComponent("Dictionary"),
         memoryDirectoryURL: URL(filePath: "./test"),
         sharedContainerURL: URL(filePath: "./test"),
         textReplacer: .init {
             return execURL.appendingPathComponent("EmojiDictionary").appendingPathComponent("emoji_all_E15.1.txt")
         },
+        specialCandidateProviders: nil,
         // zenzai
         zenzaiMode: config["enable"] as! Bool ? .on(
             weight: execURL.appendingPathComponent("zenz.gguf"),
@@ -106,6 +109,10 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
 
     load_config()
 
+    converter = KanaKanjiConverter(
+        dictionaryURL: execURL.appendingPathComponent("Dictionary"),
+        preloadDictionary: true
+    )
     composingText.insertAtCursorPosition("a", inputStyle: .roman2kana)
     converter.requestCandidates(composingText, options: getOptions())
     composingText = ComposingText()
@@ -160,6 +167,28 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
     return pointer
 }
 
+/// 候補が消費する `input` 上の文字数と、確定後に残る表示を返す。
+/// FFI には従来どおり `input` 上の文字数を渡す（`ShrinkText` が `.inputCount` で戻す）。
+/// `composingCount` を `input` の位置へ写すと、子音の前の単独の n（「nihongo」の n）で
+/// 1 文字先まで進むことがあるので、残りの表示が一致するところまで戻す。
+@MainActor func inputCount(of candidate: Candidate) -> (count: Int, remaining: String) {
+    var afterComposingText = composingText
+    afterComposingText.prefixComplete(composingCount: candidate.composingCount)
+    let remaining = afterComposingText.convertTarget
+    let rawCount = composingText.input.count - afterComposingText.input.count
+
+    var count = rawCount
+    while count > 0 {
+        var trial = composingText
+        trial.prefixComplete(composingCount: .inputCount(count))
+        if trial.convertTarget == remaining {
+            return (count, remaining)
+        }
+        count -= 1
+    }
+    return (rawCount, remaining)
+}
+
 @_silgen_name("GetComposedText")
 @MainActor public func get_composed_text(lengthPtr: UnsafeMutablePointer<Int>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
     let hiragana = composingText.convertTarget
@@ -173,11 +202,9 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
 
         let text = strdup(constructCandidateString(candidate: candidate, hiragana: hiragana))
         let hiragana = strdup(hiragana)
-        let correspondingCount = candidate.correspondingCount
 
-        var afterComposingText = composingText
-        afterComposingText.prefixComplete(correspondingCount: correspondingCount)
-        let subtext = strdup(afterComposingText.convertTarget)
+        let (correspondingCount, remaining) = inputCount(of: candidate)
+        let subtext = strdup(remaining)
 
         result.append(FFICandidate(text: text, subtext: subtext, hiragana: hiragana, correspondingCount: Int32(correspondingCount)))        
     }
@@ -192,7 +219,7 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
     offset: Int32
 ) -> UnsafeMutablePointer<CChar>  {
     var afterComposingText = composingText
-    afterComposingText.prefixComplete(correspondingCount: Int(offset))
+    afterComposingText.prefixComplete(composingCount: .inputCount(Int(offset)))
     composingText = afterComposingText
 
     return _strdup(composingText.convertTarget)!

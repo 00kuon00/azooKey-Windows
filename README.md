@@ -46,10 +46,11 @@
 ### 開発環境のセットアップ
 
 - [Rust](https://www.rust-lang.org/tools/install)
-- [Swift for Windows](https://www.swift.org/install/windows/) (Swift 6.0以上)
+- [Swift for Windows](https://www.swift.org/install/windows/) (Swift 6.1.2)
 - [protoc](https://protobuf.dev/installation/) 
 - [node.js](https://nodejs.org/en/download/)
 - [inno setup](https://jrsoftware.org/isinfo.php)
+- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/ja/downloads/) (「C++ によるデスクトップ開発」)
 
 ### ビルド
 
@@ -59,18 +60,33 @@ git clone https://github.com/fkunn1326/azookey-Windows --recursive
 ```
 `--recursive`オプションを付けて、サブモジュールも一緒にクローンしてください。
 
-#### cargo-makeのインストール
+#### 準備
 ```
-cargo install --force cargo-make
+powershell -ExecutionPolicy Bypass -File scripts\setup-dev.ps1
 ```
+CI（`.github/workflows/actions.yml`）の準備工程と同じことを手元で行います。サブモジュールの取得、i686 ターゲットの追加、Swift SDK の `ucrt.modulemap` の差し替え（元のファイルは `ucrt.modulemap.orig` に退避）、llama.cpp と `zenz.gguf` のダウンロード、`npm ci`、cargo-make のインストールです。
 
 #### ビルド
+VS 2022 Build Tools の `vcvars64.bat` を通し、`SDKROOT` を設定したコマンドプロンプトで実行します。
 ```
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+set SDKROOT=%LOCALAPPDATA%\Programs\Swift\Platforms\6.1.2\Windows.platform\Developer\SDKs\Windows.sdk\
 cargo make build [--debug/--release]
 ```
 `--debug`オプションを付けるとデバッグビルド、`--release`オプションを付けるとリリースビルドになります。必ずどちらかを指定してください。
 
 `build`フォルダーが作成され、ビルドされた実行ファイルが格納されます。
+
+リポジトリのパスは 64 文字以内にしてください。長いと、SwiftPM が変換エンジンの辞書サブモジュールを取得するところで `'$GIT_DIR' too big` になって止まります。
+
+#### Swift のテスト
+上と同じコマンドプロンプトで、`llama.dll` が見つかるよう `llama_cpu` を `PATH` に足して実行します。
+```
+set PATH=%CD%\llama_cpu;%PATH%
+cd server-swift
+swift test -c release -Xcc -D_CRT_USE_C_COMPLEX_H -Xcxx -D_CRT_USE_C_COMPLEX_H
+```
+`-D_CRT_USE_C_COMPLEX_H` は、Zenzai の C++ 相互運用で Windows SDK の `complex.h` が `<ccomplex>` を読みに行って失敗するのを止めるためのものです（`cargo make build` でも同じものを渡しています）。
 
 `launcher.exe`を管理者権限で実行すると、azookeyの変換エンジンが起動します。
 

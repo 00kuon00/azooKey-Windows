@@ -7,7 +7,8 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # Swift 6.1.2 の clang 19 は VS 18 の MSVC 14.51（Clang 20 以上を要求）で STL1000 になるため VS 2022 に固定する
+    runs-on: windows-2022
 
     steps:
     - uses: actions/checkout@v4
@@ -20,19 +21,22 @@ jobs:
     - name: Install Swift
       uses: compnerd/gha-setup-swift@main
       with:
-        branch: swift-6.0.2-release
-        tag: 6.0.2-RELEASE
+        swift-version: swift-6.1.2-release
+        swift-build: 6.1.2-RELEASE
 
     - name: Fix swift sdk
       shell: pwsh
       run: |
-        $SwiftPath = "$env:APPDATA\..\Local\Programs\Swift\Platforms\6.0.2\Windows.platform\Developer\SDKs\Windows.sdk\usr"
+        $SwiftPath = "$env:APPDATA\..\Local\Programs\Swift\Platforms\6.1.2\Windows.platform\Developer\SDKs\Windows.sdk\usr"
         $modulemapUrl = "https://gist.githubusercontent.com/fkunn1326/ef8be2217082302b291f2b8d4178194a/raw/c424968c250afcd5afa1131aea1329dc0744a7f9/ucrt.modulemap"
         $destination = "$SwiftPath\share\ucrt.modulemap"
         Invoke-WebRequest -Uri $modulemapUrl -OutFile $destination
     
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
+      with:
+        # トークン無しだとランナーの共有 IP で GitHub API の上限に当たる
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Install cargo-make
       run: cargo install --force cargo-make
