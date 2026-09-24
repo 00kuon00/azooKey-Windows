@@ -1,7 +1,7 @@
 use crate::extension::VKeyExt;
 use anyhow::{Context, Result};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardState, ToUnicode, VK_CONTROL, VK_MENU, VK_SHIFT,
+    GetKeyboardState, ToUnicode, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 
 #[derive(Debug)]
@@ -22,6 +22,8 @@ pub enum UserAction {
     // Shift+← / Shift+→: 変換中の文節の読みを 1 文字縮める / 伸ばす
     ShrinkSegment,
     ExpandSegment,
+    // Win+/: 確定済みの文字列を再変換する
+    Reconvert,
 }
 
 #[derive(Debug)]
@@ -83,6 +85,9 @@ impl TryFrom<usize> for UserAction {
             0x79 => UserAction::Function(Function::Ten), // VK_F10
 
             0xF3 | 0xF4 => UserAction::ToggleInputMode, // Zenkaku/Hankaku
+
+            // Win+/（VK_OEM_2）。下の ToUnicode に回すと「/」の入力になる
+            0xBF if VK_LWIN.is_pressed() || VK_RWIN.is_pressed() => UserAction::Reconvert,
 
             _ => {
                 let key_state = {

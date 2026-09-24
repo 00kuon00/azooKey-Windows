@@ -12,9 +12,10 @@ use windows::{
         Foundation::BOOL,
         System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
         UI::TextServices::{
-            CLSID_TF_CategoryMgr, ITfCategoryMgr, ITfKeyEventSink, ITfKeystrokeMgr,
-            ITfLangBarItemButton, ITfLangBarItemMgr, ITfSource, ITfTextInputProcessorEx_Impl,
-            ITfTextInputProcessor_Impl, ITfThreadMgr, ITfThreadMgrEventSink,
+            CLSID_TF_CategoryMgr, ITfCategoryMgr, ITfFunctionProvider, ITfKeyEventSink,
+            ITfKeystrokeMgr, ITfLangBarItemButton, ITfLangBarItemMgr, ITfSource, ITfSourceSingle,
+            ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfThreadMgr,
+            ITfThreadMgrEventSink,
         },
     },
 };
@@ -70,6 +71,19 @@ impl ITfTextInputProcessor_Impl for TextServiceFactory_Impl {
                 .cookies
                 .insert(ITfThreadMgrEventSink::IID, cookie);
         };
+
+        // 再変換（ITfFnReconversion）をアプリや OS から呼べるようにする。
+        // できなくても入力と Win+/ の再変換は使えるので、失敗は記録だけする
+        tracing::debug!("AdviseSingleSink(ITfFunctionProvider)");
+        let provider = text_service.this::<ITfFunctionProvider>()?;
+        let advised = unsafe {
+            thread_mgr.cast::<ITfSourceSingle>().and_then(|source| {
+                source.AdviseSingleSink(tid, &ITfFunctionProvider::IID, &provider)
+            })
+        };
+        if let Err(error) = advised {
+            tracing::warn!("Failed to advise ITfFunctionProvider: {error:?}");
+        }
 
         // initialize text layout sink
         tracing::debug!("AdviseTextLayoutSink");
@@ -128,6 +142,16 @@ impl ITfTextInputProcessor_Impl for TextServiceFactory_Impl {
                     .cast::<ITfKeystrokeMgr>()?
                     .UnadviseKeyEventSink(text_service.tid)?;
             };
+
+            tracing::debug!("UnadviseSingleSink(ITfFunctionProvider)");
+            let unadvised = unsafe {
+                thread_mgr.cast::<ITfSourceSingle>().and_then(|source| {
+                    source.UnadviseSingleSink(text_service.tid, &ITfFunctionProvider::IID)
+                })
+            };
+            if let Err(error) = unadvised {
+                tracing::warn!("Failed to unadvise ITfFunctionProvider: {error:?}");
+            }
 
             tracing::debug!("Remove langbar");
             unsafe {

@@ -6,8 +6,8 @@ use windows::{
         UI::TextServices::{
             ITfComposition, ITfCompositionSink, ITfContext, ITfContextComposition, ITfEditSession,
             ITfEditSession_Impl, ITfInsertAtSelection, ITfRange, GUID_PROP_ATTRIBUTE, TF_AE_NONE,
-            TF_ANCHOR_END, TF_ANCHOR_START, TF_ES_READWRITE, TF_IAS_QUERYONLY, TF_SELECTION,
-            TF_SELECTIONSTYLE, TF_ST_CORRECTION, TF_TF_MOVESTART,
+            TF_ANCHOR_END, TF_ANCHOR_START, TF_CONTEXT_EDIT_CONTEXT_FLAGS, TF_ES_READWRITE,
+            TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE, TF_ST_CORRECTION, TF_TF_MOVESTART,
         },
     },
 };
@@ -33,6 +33,16 @@ pub fn edit_session<T>(
     context: ITfContext,
     callback: Rc<dyn Fn(u32) -> anyhow::Result<T>>,
 ) -> Result<Option<T>> {
+    edit_session_with_flags(client_id, context, TF_ES_READWRITE, callback)
+}
+
+// 読み取りだけ・同期で、などフラグを選ぶ版。編集が走らなかったとき（非同期になった・失敗した）は None
+pub fn edit_session_with_flags<T>(
+    client_id: u32,
+    context: ITfContext,
+    flags: TF_CONTEXT_EDIT_CONTEXT_FLAGS,
+    callback: Rc<dyn Fn(u32) -> anyhow::Result<T>>,
+) -> Result<Option<T>> {
     let session: ITfEditSession = EditSession {
         callback,
         result: Cell::new(None),
@@ -40,7 +50,7 @@ pub fn edit_session<T>(
     }
     .into();
 
-    let result = unsafe { context.RequestEditSession(client_id, &session, TF_ES_READWRITE) };
+    let result = unsafe { context.RequestEditSession(client_id, &session, flags) };
 
     match result {
         Ok(_) => {

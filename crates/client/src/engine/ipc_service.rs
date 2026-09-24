@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use hyper_util::rt::TokioIo;
 use shared::proto::{
     azookey_service_client::AzookeyServiceClient, window_service_client::WindowServiceClient,
@@ -280,6 +280,39 @@ impl IPCService {
         };
 
         Ok(candidates)
+    }
+
+    /// 確定済みの文字列を読みに戻して候補を得る。読みが推定できなければ候補は空
+    #[tracing::instrument]
+    pub fn start_reconversion(&mut self, text: String) -> anyhow::Result<Candidates> {
+        let request = tonic::Request::new(shared::proto::StartReconversionRequest { text });
+        let response = self
+            .runtime
+            .clone()
+            .block_on(self.azookey_client.start_reconversion(request))?;
+        let composing_text = response
+            .into_inner()
+            .composing_text
+            .context("composing_text is None")?;
+
+        Ok(Candidates {
+            texts: composing_text
+                .suggestions
+                .iter()
+                .map(|s| s.text.clone())
+                .collect(),
+            sub_texts: composing_text
+                .suggestions
+                .iter()
+                .map(|s| s.subtext.clone())
+                .collect(),
+            hiragana: composing_text.hiragana,
+            corresponding_count: composing_text
+                .suggestions
+                .iter()
+                .map(|s| s.corresponding_count)
+                .collect(),
+        })
     }
 
     pub fn set_context(&mut self, context: String) -> anyhow::Result<()> {
