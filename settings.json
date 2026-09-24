@@ -4,5 +4,8 @@
         "enable": false,
         "profile": "",
         "backend": "cpu"
+    },
+    "learning": {
+        "mode": "inputAndOutput"
     }
 }
