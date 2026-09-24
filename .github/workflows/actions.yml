@@ -34,6 +34,9 @@ jobs:
     
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
+      with:
+        # トークン無しだとランナーの共有 IP で GitHub API の上限に当たる
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Install cargo-make
       run: cargo install --force cargo-make
