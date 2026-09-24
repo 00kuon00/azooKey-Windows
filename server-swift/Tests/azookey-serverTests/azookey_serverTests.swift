@@ -79,6 +79,22 @@ extension GlobalStateTests {
         text.withCString { commit_candidate(text: $0) }
     }
 
+    /// 候補の学習を忘れさせ、取り直した候補の文字列（同じ文字列は最初の 1 件だけ）を返す
+    func forget(_ text: String) -> [String] {
+        free(text.withCString { forget_candidate(text: $0) })
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        let list = get_composed_text(lengthPtr: length)
+        var texts: [String] = []
+        for i in 0..<length.pointee {
+            let text = String(cString: list[i]!.pointee.text)
+            if !texts.contains(text) {
+                texts.append(text)
+            }
+        }
+        return texts
+    }
+
     func memoryFiles() -> [String] {
         (try? FileManager.default.contentsOfDirectory(atPath: memoryURL.path(percentEncoded: false))) ?? []
     }
@@ -126,6 +142,39 @@ extension GlobalStateTests {
 
         let after = type("kanji")
         #expect(after.first == before.first)
+        clear_text()
+    }
+
+    // 学習した候補を忘れさせると、その場で取り直した候補も、次に同じ読みを変換したときも元の順位に戻る
+    @Test func forgetCandidateRestoresOriginalOrder() {
+        learningType = .inputAndOutput
+        let before = type("kanji")
+        #expect(before.count >= 2)
+        let chosen = before[1]
+        commit(chosen)
+        clear_text()
+
+        let learned = type("kanji")
+        #expect(learned.first == chosen)
+
+        // 候補を選んでいる最中に忘れさせる（入力中の文字列はそのまま）
+        let refreshed = forget(chosen)
+        #expect(refreshed.first == before.first)
+        clear_text()
+
+        let after = type("kanji")
+        #expect(after.first == before.first)
+        clear_text()
+    }
+
+    // 学習していない候補を忘れさせても何も変わらない
+    @Test func forgetUnlearnedCandidateKeepsOrder() {
+        learningType = .inputAndOutput
+        let before = type("kanji")
+        #expect(before.count >= 2)
+
+        let refreshed = forget(before[1])
+        #expect(refreshed == before)
         clear_text()
     }
 

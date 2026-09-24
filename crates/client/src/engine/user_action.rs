@@ -1,6 +1,8 @@
 use crate::extension::VKeyExt;
 use anyhow::{Context, Result};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState, ToUnicode, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyboardState, ToUnicode, VK_CONTROL, VK_SHIFT,
+};
 
 #[derive(Debug)]
 pub enum UserAction {
@@ -15,6 +17,8 @@ pub enum UserAction {
     Function(Function),
     Number(i8),
     ToggleInputMode,
+    // Ctrl+Delete: 選んでいる候補の学習を忘れる
+    Forget,
 }
 
 #[derive(Debug)]
@@ -43,6 +47,8 @@ impl TryFrom<usize> for UserAction {
             0x0D => UserAction::Enter,     // VK_RETURN
             0x20 => UserAction::Space,     // VK_SPACE
             0x1B => UserAction::Escape,    // VK_ESCAPE
+
+            0x2E if VK_CONTROL.is_pressed() => UserAction::Forget, // Ctrl + VK_DELETE
 
             0x25 => UserAction::Navigation(Navigation::Left), // VK_LEFT
             0x26 => UserAction::Navigation(Navigation::Up),   // VK_UP

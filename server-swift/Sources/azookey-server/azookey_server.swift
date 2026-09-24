@@ -345,6 +345,22 @@ func shouldLearn(_ text: String) -> Bool {
     converter.commitUpdateLearningData()
 }
 
+/// 候補の学習だけを忘れる（候補選択中の Ctrl+Delete）。入力中の文字列はそのまま残し、それを返す。
+/// `text` の探し方は CommitCandidate と同じ。学習の保存先だけを消すので、ユーザー辞書の語は残る。
+/// 「新しく学習しない」「学習しない」のときは、変換エンジンが何もしない
+@_silgen_name("ForgetCandidate")
+@MainActor public func forget_candidate(text: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar> {
+    let text = String(cString: text)
+    if let candidate = lastCandidates.first(where: { $0.text == text })?.candidate {
+        converter.forgetMemory(candidate)
+        // 同じ入力で取り直すと前回の変換結果が使い回され、忘れる前の順位のまま出るので捨てさせる
+        converter.stopComposition()
+    } else {
+        print("ForgetCandidate: candidate not found: \(text)")
+    }
+    return _strdup(composingText.convertTarget)!
+}
+
 /// 直近のユーザー辞書の作り直しで登録できなかった語を JSON（`[{"reading": ..., "word": ...}]`）で返す
 @_silgen_name("GetUnregisteredUserDictionaryEntries")
 @MainActor public func get_unregistered_user_dictionary_entries() -> UnsafeMutablePointer<CChar> {

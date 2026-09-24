@@ -39,6 +39,7 @@ unsafe extern "C" {
     fn LoadConfig();
     fn CommitCandidate(text: *const c_char);
     fn ResetLearning();
+    fn ForgetCandidate(text: *const c_char) -> *mut c_char;
     fn GetUnregisteredUserDictionaryEntries() -> *mut c_char;
 }
 
@@ -291,6 +292,25 @@ impl AzookeyService for MyAzookeyService {
     ) -> Result<Response<shared::proto::ResetLearningResponse>, Status> {
         unsafe { ResetLearning() };
         Ok(Response::new(shared::proto::ResetLearningResponse {}))
+    }
+
+    async fn forget_candidate(
+        &self,
+        request: Request<shared::proto::ForgetCandidateRequest>,
+    ) -> Result<Response<shared::proto::ForgetCandidateResponse>, Status> {
+        let text = request.into_inner().text;
+        let text = CString::new(text).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let hiragana = unsafe {
+            let result = ForgetCandidate(text.as_ptr());
+            CStr::from_ptr(result).to_string_lossy().into_owned()
+        };
+
+        Ok(Response::new(shared::proto::ForgetCandidateResponse {
+            composing_text: Some(ComposingText {
+                hiragana,
+                suggestions: get_composed_text(),
+            }),
+        }))
     }
 }
 

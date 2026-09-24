@@ -18,7 +18,7 @@ use super::{
 use windows::Win32::{
     Foundation::WPARAM,
     UI::{
-        Input::KeyboardAndMouse::VK_CONTROL,
+        Input::KeyboardAndMouse::{VK_CONTROL, VK_DELETE},
         TextServices::{ITfComposition, ITfCompositionSink_Impl, ITfContext},
     },
 };
@@ -80,8 +80,8 @@ impl TextServiceFactory {
             return Ok(None);
         };
 
-        // check shortcut keys
-        if VK_CONTROL.is_pressed() {
+        // check shortcut keys（Ctrl+Delete だけは候補の学習を忘れる操作として受ける）
+        if VK_CONTROL.is_pressed() && wparam.0 != VK_DELETE.0 as usize {
             return Ok(None);
         }
 
@@ -306,6 +306,10 @@ impl TextServiceFactory {
                         vec![ClientAction::SetTextWithType(SetTextType::HalfLatin)],
                     ),
                 },
+                UserAction::Forget => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::ForgetCandidate],
+                ),
                 _ => {
                     return Ok(None);
                 }
@@ -545,6 +549,28 @@ impl TextServiceFactory {
                         if let Err(error) = ipc_service.commit_candidate(preview.clone()) {
                             tracing::warn!("Failed to commit candidate: {error:?}");
                         }
+                    }
+                }
+                ClientAction::ForgetCandidate => {
+                    // F6〜F10 の置き換えは候補ではないので、何もしない
+                    let is_candidate = !converted_by_function_key
+                        && candidates.texts.get(selection_index as usize) == Some(&preview);
+                    if is_candidate {
+                        candidates = ipc_service.forget_candidate(preview.clone())?;
+                        // 忘れた候補は順位が下がるので、先頭の候補を選び直す
+                        selection_index = 0;
+                        let text = candidates.texts.first().cloned().unwrap_or_default();
+                        let sub_text = candidates.sub_texts.first().cloned().unwrap_or_default();
+                        corresponding_count =
+                            candidates.corresponding_count.first().cloned().unwrap_or(0);
+
+                        preview = text.clone();
+                        suffix = sub_text.clone();
+                        raw_hiragana = candidates.hiragana.clone();
+
+                        self.set_text(&text, &sub_text)?;
+                        ipc_service.set_candidates(candidates.texts.clone())?;
+                        ipc_service.set_selection(selection_index)?;
                     }
                 }
                 ClientAction::SetTextWithType(set_type) => {
