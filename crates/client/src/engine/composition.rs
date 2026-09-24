@@ -45,6 +45,8 @@ pub struct Composition {
 
     pub selection_index: i32,
     pub candidates: Candidates,
+    // F6〜F10 でひらがな・カタカナ・英数に置き換えて表示している（候補ではないので学習しない）
+    pub converted_by_function_key: bool,
 
     pub state: CompositionState,
     pub tip_composition: Option<ITfComposition>,
@@ -141,11 +143,17 @@ impl TextServiceFactory {
                 }
                 UserAction::Enter => {
                     if composition.suffix.is_empty() {
-                        (CompositionState::None, vec![ClientAction::EndComposition])
+                        (
+                            CompositionState::None,
+                            vec![ClientAction::CommitCandidate, ClientAction::EndComposition],
+                        )
                     } else {
                         (
                             CompositionState::Composing,
-                            vec![ClientAction::ShrinkText("".to_string())],
+                            vec![
+                                ClientAction::CommitCandidate,
+                                ClientAction::ShrinkText("".to_string()),
+                            ],
                         )
                     }
                 }
@@ -229,11 +237,17 @@ impl TextServiceFactory {
                 }
                 UserAction::Enter => {
                     if composition.suffix.is_empty() {
-                        (CompositionState::None, vec![ClientAction::EndComposition])
+                        (
+                            CompositionState::None,
+                            vec![ClientAction::CommitCandidate, ClientAction::EndComposition],
+                        )
                     } else {
                         (
                             CompositionState::Composing,
-                            vec![ClientAction::ShrinkText("".to_string())],
+                            vec![
+                                ClientAction::CommitCandidate,
+                                ClientAction::ShrinkText("".to_string()),
+                            ],
                         )
                     }
                 }
@@ -342,6 +356,7 @@ impl TextServiceFactory {
         let mut corresponding_count = composition.corresponding_count.clone();
         let mut candidates = composition.candidates.clone();
         let mut selection_index = composition.selection_index;
+        let mut converted_by_function_key = composition.converted_by_function_key;
         let mut ipc_service = IMEState::get()?
             .ipc_service
             .clone()
@@ -359,6 +374,7 @@ impl TextServiceFactory {
                 }
                 ClientAction::EndComposition => {
                     self.end_composition()?;
+                    converted_by_function_key = false;
                     selection_index = 0;
                     corresponding_count = 0;
                     preview.clear();
@@ -370,6 +386,7 @@ impl TextServiceFactory {
                     ipc_service.clear_text()?;
                 }
                 ClientAction::AppendText(text) => {
+                    converted_by_function_key = false;
                     raw_input.push_str(&text);
 
                     let text = match mode {
@@ -393,6 +410,7 @@ impl TextServiceFactory {
                     ipc_service.set_selection(selection_index as i32)?;
                 }
                 ClientAction::RemoveText => {
+                    converted_by_function_key = false;
                     candidates = ipc_service.remove_text()?;
                     let empty = "".to_string();
                     let text = candidates
@@ -429,6 +447,7 @@ impl TextServiceFactory {
                     // self.set_cursor(offset)?;
                 }
                 ClientAction::SetIMEMode(mode) => {
+                    converted_by_function_key = false;
                     self.start_composition()?;
                     self.update_pos()?;
                     self.end_composition()?;
@@ -455,6 +474,7 @@ impl TextServiceFactory {
                     ipc_service.clear_text()?;
                 }
                 ClientAction::SetSelection(selection) => {
+                    converted_by_function_key = false;
                     let candidates = {
                         let text_service = self.borrow()?;
                         let composition = text_service.borrow_composition()?.clone();
@@ -484,6 +504,7 @@ impl TextServiceFactory {
                     self.set_text(&text, &sub_text)?;
                 }
                 ClientAction::ShrinkText(text) => {
+                    converted_by_function_key = false;
                     // shrink text
                     raw_input.push_str(&text);
                     raw_input = raw_input
@@ -515,7 +536,19 @@ impl TextServiceFactory {
 
                     transition = CompositionState::Composing;
                 }
+                ClientAction::CommitCandidate => {
+                    // 表示中の文字列が候補そのもののときだけ学習する（F6〜F10 の置き換えは学習しない）
+                    let is_candidate = !converted_by_function_key
+                        && candidates.texts.get(selection_index as usize) == Some(&preview);
+                    if is_candidate && self.is_learning_allowed_field().unwrap_or(true) {
+                        // 学習できなくても入力は続けられるので、失敗は記録だけする
+                        if let Err(error) = ipc_service.commit_candidate(preview.clone()) {
+                            tracing::warn!("Failed to commit candidate: {error:?}");
+                        }
+                    }
+                }
                 ClientAction::SetTextWithType(set_type) => {
+                    converted_by_function_key = true;
                     let text = match set_type {
                         SetTextType::Hiragana => raw_hiragana.clone(),
                         SetTextType::Katakana => to_katakana(&raw_hiragana),
@@ -540,6 +573,7 @@ impl TextServiceFactory {
         composition.candidates = candidates;
         composition.suffix = suffix.clone();
         composition.corresponding_count = corresponding_count;
+        composition.converted_by_function_key = converted_by_function_key;
 
         Ok(())
     }

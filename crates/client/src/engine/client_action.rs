@@ -8,6 +8,8 @@ pub enum ClientAction {
     AppendText(String),
     RemoveText,
     ShrinkText(String),
+    // 表示中の候補を確定したことをサーバへ伝える（学習）。EndComposition / ShrinkText の前に置く
+    CommitCandidate,
 
     SetTextWithType(SetTextType),
 
