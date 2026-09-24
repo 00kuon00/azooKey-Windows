@@ -11,6 +11,7 @@ use super::{
     full_width::{to_fullwidth, to_halfwidth},
     input_mode::InputMode,
     ipc_service::Candidates,
+    segment::moved_segment_len,
     state::IMEState,
     text_util::{to_half_katakana, to_katakana},
     user_action::{Function, Navigation},
@@ -190,6 +191,14 @@ impl TextServiceFactory {
                     CompositionState::Previewing,
                     vec![ClientAction::SetSelection(SetSelectionType::Down)],
                 ),
+                UserAction::ShrinkSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(-1)],
+                ),
+                UserAction::ExpandSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(1)],
+                ),
                 UserAction::Function(key) => match key {
                     Function::Six => (
                         CompositionState::Previewing,
@@ -283,6 +292,14 @@ impl TextServiceFactory {
                 UserAction::Space | UserAction::Tab => (
                     CompositionState::Previewing,
                     vec![ClientAction::SetSelection(SetSelectionType::Down)],
+                ),
+                UserAction::ShrinkSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(-1)],
+                ),
+                UserAction::ExpandSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(1)],
                 ),
                 UserAction::Function(key) => match key {
                     Function::Six => (
@@ -506,6 +523,24 @@ impl TextServiceFactory {
                     raw_hiragana = hiragana.clone();
 
                     self.set_text(&text, &sub_text)?;
+                }
+                ClientAction::MoveSegmentBoundary(delta) => {
+                    converted_by_function_key = false;
+                    let segment_len = moved_segment_len(&raw_hiragana, &suffix, *delta);
+                    candidates = ipc_service.set_segment(segment_len as i32)?;
+                    selection_index = 0;
+
+                    let text = candidates.texts[selection_index as usize].clone();
+                    let sub_text = candidates.sub_texts[selection_index as usize].clone();
+                    corresponding_count = candidates.corresponding_count[selection_index as usize];
+
+                    preview = text.clone();
+                    suffix = sub_text.clone();
+                    raw_hiragana = candidates.hiragana.clone();
+
+                    self.set_text(&text, &sub_text)?;
+                    ipc_service.set_candidates(candidates.texts.clone())?;
+                    ipc_service.set_selection(selection_index as i32)?;
                 }
                 ClientAction::ShrinkText(text) => {
                     converted_by_function_key = false;

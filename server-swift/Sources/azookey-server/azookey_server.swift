@@ -18,6 +18,9 @@ import ffi
 @MainActor var memoryDirectoryURL: URL = defaultMemoryDirectoryURL()
 // 直近の GetComposedText で返した候補。確定の知らせ（CommitCandidate）を受けたとき、表示文字列から Candidate を引く
 @MainActor var lastCandidates: [(text: String, candidate: Candidate)] = []
+// Shift+←→ で決めた最初の文節の読みの長さ（convertTarget 上の文字数）。nil のときは区切りを変換器に任せる。
+// 入力・削除・確定・消去で nil に戻す
+@MainActor var segmentSurfaceCount: Int?
 
 // システム辞書の場所。Initialize で execURL から決まる（テストでは差し替える）
 @MainActor var systemDictionaryURL = URL(filePath: "")
@@ -196,6 +199,7 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
 ) -> UnsafeMutablePointer<CChar> {
     let inputString = String(cString: input)
     composingText.insertAtCursorPosition(inputString, inputStyle: .roman2kana)
+    segmentSurfaceCount = nil
 
     cursorPtr.pointee = composingText.convertTargetCursorPosition    
     return _strdup(composingText.convertTarget)!
@@ -206,6 +210,7 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
     cursorPtr: UnsafeMutablePointer<Int>
 ) -> UnsafeMutablePointer<CChar> {
     composingText.deleteBackwardFromCursorPosition(count: 1)
+    segmentSurfaceCount = nil
 
     cursorPtr.pointee = composingText.convertTargetCursorPosition
     return _strdup(composingText.convertTarget)!
@@ -228,6 +233,7 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
 @MainActor public func clear_text() {
     composingText = ComposingText()
     lastCandidates = []
+    segmentSurfaceCount = nil
     // 入力の区切り。前の入力で確定した語を、次の入力の学習の「直前の語」に持ち越さない
     converter.stopComposition()
 }
@@ -246,8 +252,12 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
 /// `composingCount` を `input` の位置へ写すと、子音の前の単独の n（「nihongo」の n）で
 /// 1 文字先まで進むことがあるので、残りの表示が一致するところまで戻す。
 @MainActor func inputCount(of candidate: Candidate) -> (count: Int, remaining: String) {
+    inputCount(of: candidate.composingCount)
+}
+
+@MainActor func inputCount(of composingCount: ComposingCount) -> (count: Int, remaining: String) {
     var afterComposingText = composingText
-    afterComposingText.prefixComplete(composingCount: candidate.composingCount)
+    afterComposingText.prefixComplete(composingCount: composingCount)
     let remaining = afterComposingText.convertTarget
     let rawCount = composingText.input.count - afterComposingText.input.count
 
@@ -263,8 +273,55 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
     return (rawCount, remaining)
 }
 
+/// 最初の文節の読みの長さを決める（Shift+←→）。範囲外の値は 1〜読みの長さに収める。
+/// 候補は次の GetComposedText で、その長さの読みを 1 つの文節として変換したものになる
+@_silgen_name("SetSegmentSurfaceCount")
+@MainActor public func set_segment_surface_count(count: Int32) -> UnsafeMutablePointer<CChar> {
+    let total = composingText.convertTarget.count
+    segmentSurfaceCount = total == 0 ? nil : max(1, min(Int(count), total))
+    return _strdup(composingText.convertTarget)!
+}
+
+/// 最初の文節（読みの先頭 `surfaceCount` 文字）だけを変換した候補。
+/// どの候補も文節の読みをすべて使うものに絞り、確定後に残る表示は文節より後ろの読みになる
+@MainActor func segmentCandidates(surfaceCount: Int) -> [FFICandidate] {
+    var cursorMoved = composingText
+    _ = cursorMoved.moveCursorFromCursorPosition(count: surfaceCount - cursorMoved.convertTargetCursorPosition)
+    let segment = cursorMoved.prefixToCursorPosition()
+    let segmentHiragana = segment.convertTarget
+
+    let hiragana = composingText.convertTarget
+    let (correspondingCount, remaining) = inputCount(of: .surfaceCount(surfaceCount))
+    let contextString = (config["context"] as? String) ?? ""
+    let converted = converter.requestCandidates(segment, options: getOptions(context: contextString))
+    var result: [FFICandidate] = []
+
+    for candidate in converted.mainResults {
+        // 文節の途中までしか使わない候補は、区切りを動かした意味がなくなるので出さない
+        var afterSegment = segment
+        afterSegment.prefixComplete(composingCount: candidate.composingCount)
+        guard afterSegment.convertTarget.isEmpty else {
+            continue
+        }
+        let candidateString = constructCandidateString(candidate: candidate, hiragana: segmentHiragana)
+        lastCandidates.append((candidateString, candidate))
+        result.append(FFICandidate(text: strdup(candidateString), subtext: strdup(remaining), hiragana: strdup(hiragana), correspondingCount: Int32(correspondingCount)))
+    }
+    // 読みをすべて使う候補が 1 つも無いときは読みのまま出す（学習の対象にはしない）
+    if result.isEmpty {
+        result.append(FFICandidate(text: strdup(segmentHiragana), subtext: strdup(remaining), hiragana: strdup(hiragana), correspondingCount: Int32(correspondingCount)))
+    }
+    return result
+}
+
 @_silgen_name("GetComposedText")
 @MainActor public func get_composed_text(lengthPtr: UnsafeMutablePointer<Int>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    if let segmentSurfaceCount {
+        lastCandidates = []
+        let result = segmentCandidates(surfaceCount: segmentSurfaceCount)
+        lengthPtr.pointee = result.count
+        return to_list_pointer(result)
+    }
     let hiragana = composingText.convertTarget
     let contextString = (config["context"] as? String) ?? ""
     let options = getOptions(context: contextString)
@@ -296,8 +353,14 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
     offset: Int32
 ) -> UnsafeMutablePointer<CChar>  {
     var afterComposingText = composingText
-    afterComposingText.prefixComplete(composingCount: .inputCount(Int(offset)))
+    // 文節の区切りを動かしたあとは、文節の読みの長さで確定する（どの候補も文節の読みをすべて使う）
+    if let segmentSurfaceCount {
+        afterComposingText.prefixComplete(composingCount: .surfaceCount(segmentSurfaceCount))
+    } else {
+        afterComposingText.prefixComplete(composingCount: .inputCount(Int(offset)))
+    }
     composingText = afterComposingText
+    segmentSurfaceCount = nil
 
     return _strdup(composingText.convertTarget)!
 }

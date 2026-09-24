@@ -200,6 +200,42 @@ impl IPCService {
         Ok(candidates)
     }
 
+    /// 最初の文節の読みを `surface_count` 文字にして変換し直す（Shift+←→）
+    #[tracing::instrument]
+    pub fn set_segment(&mut self, surface_count: i32) -> anyhow::Result<Candidates> {
+        let request = tonic::Request::new(shared::proto::SetSegmentRequest { surface_count });
+        let response = self
+            .runtime
+            .clone()
+            .block_on(self.azookey_client.set_segment(request))?;
+        let composing_text = response.into_inner().composing_text;
+
+        let candidates = if let Some(composing_text) = composing_text {
+            Candidates {
+                texts: composing_text
+                    .suggestions
+                    .iter()
+                    .map(|s| s.text.clone())
+                    .collect(),
+                sub_texts: composing_text
+                    .suggestions
+                    .iter()
+                    .map(|s| s.subtext.clone())
+                    .collect(),
+                hiragana: composing_text.hiragana,
+                corresponding_count: composing_text
+                    .suggestions
+                    .iter()
+                    .map(|s| s.corresponding_count)
+                    .collect(),
+            }
+        } else {
+            anyhow::bail!("composing_text is None");
+        };
+
+        Ok(candidates)
+    }
+
     #[tracing::instrument]
     pub fn commit_candidate(&mut self, text: String) -> anyhow::Result<()> {
         let request = tonic::Request::new(shared::proto::CommitCandidateRequest { text });

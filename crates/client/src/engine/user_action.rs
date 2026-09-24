@@ -19,6 +19,9 @@ pub enum UserAction {
     ToggleInputMode,
     // Ctrl+Delete: 選んでいる候補の学習を忘れる
     Forget,
+    // Shift+← / Shift+→: 変換中の文節の読みを 1 文字縮める / 伸ばす
+    ShrinkSegment,
+    ExpandSegment,
 }
 
 #[derive(Debug)]
@@ -49,6 +52,8 @@ impl TryFrom<usize> for UserAction {
             0x1B => UserAction::Escape,    // VK_ESCAPE
 
             0x2E if VK_CONTROL.is_pressed() => UserAction::Forget, // Ctrl + VK_DELETE
+            0x25 if VK_SHIFT.is_pressed() => UserAction::ShrinkSegment, // Shift+VK_LEFT
+            0x27 if VK_SHIFT.is_pressed() => UserAction::ExpandSegment, // Shift+VK_RIGHT
 
             0x25 => UserAction::Navigation(Navigation::Left), // VK_LEFT
             0x26 => UserAction::Navigation(Navigation::Up),   // VK_UP

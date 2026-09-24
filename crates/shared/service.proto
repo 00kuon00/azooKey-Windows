@@ -46,6 +46,15 @@ message ShrinkTextResponse {
     ComposingText composing_text = 1; // The resulting text and suggestions.
 }
 
+// 最初の文節の読みの長さを決める（Shift+←→）。候補はその長さの読みを 1 つの文節として変換したものになる
+message SetSegmentRequest {
+  int32 surface_count = 1; // 文節の読みの文字数（ひらがなの文字数）
+}
+
+message SetSegmentResponse {
+  ComposingText composing_text = 1;
+}
+
 // Response message for MoveCursor.
 message MoveCursorResponse {
   ComposingText composing_text = 1; // The resulting text and suggestions.
@@ -99,6 +108,7 @@ service AzookeyService {
   rpc AppendText (AppendTextRequest) returns (AppendTextResponse);
   rpc RemoveText (RemoveTextRequest) returns (RemoveTextResponse);
   rpc ShrinkText (ShrinkTextRequest) returns (ShrinkTextResponse);
+  rpc SetSegment (SetSegmentRequest) returns (SetSegmentResponse);
   rpc MoveCursor (MoveCursorRequest) returns (MoveCursorResponse);
   rpc ClearText (ClearTextRequest) returns (ClearTextResponse);
   rpc SetContext (SetContextRequest) returns (SetContextResponse);
