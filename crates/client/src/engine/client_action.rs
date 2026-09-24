@@ -17,6 +17,8 @@ pub enum ClientAction {
 
     MoveCursor(i32),
     SetSelection(SetSelectionType),
+    // 最初の文節の読みを増減する（Shift+←→）。値は増やす文字数
+    MoveSegmentBoundary(i32),
 
     SetIMEMode(InputMode),
 }

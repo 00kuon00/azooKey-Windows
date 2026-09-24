@@ -347,3 +347,108 @@ extension GlobalStateTests {
     }
 }
 }
+
+extension GlobalStateTests {
+@MainActor @Suite struct SegmentTests {
+    let workURL: URL
+
+    init() {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        execURL = root.appendingPathComponent("azooKey_emoji_dictionary_storage")
+        config["enable"] = false
+        config["profile"] = ""
+        workURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-segment-test-\(UUID().uuidString)", isDirectory: true)
+        // 学習は使わない（学習の結果で候補が変わらないように）
+        learningType = .nothing
+        memoryDirectoryURL = workURL.appendingPathComponent("memory", isDirectory: true)
+        userDictionaryURL = workURL.appendingPathComponent("user_dictionary", isDirectory: true)
+        converter = KanaKanjiConverter(
+            dictionaryURL: root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary"),
+            preloadDictionary: false
+        )
+        clear_text()
+    }
+
+    func type(_ roman: String) {
+        for character in roman {
+            let cursor = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+            free(append_text(input: String(character), cursorPtr: cursor))
+            cursor.deallocate()
+        }
+    }
+
+    /// GetComposedText の候補（文字列・確定後に残る読み）
+    func candidates() -> [(text: String, subtext: String)] {
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        let list = get_composed_text(lengthPtr: length)
+        return (0..<length.pointee).map { i in
+            (String(cString: list[i]!.pointee.text), String(cString: list[i]!.pointee.subtext))
+        }
+    }
+
+    func setSegment(_ count: Int32) {
+        free(set_segment_surface_count(count: count))
+    }
+
+    // 区切りを動かすと、最初の文節の読みが変わり、どの候補もその読みをすべて使う
+    @Test func movingBoundaryChangesReadingOfFirstSegment() {
+        type("kyouhaiitenki")
+        #expect(composingText.convertTarget == "きょうはいいてんき")
+
+        setSegment(3)
+        let shrunk = candidates()
+        #expect(!shrunk.isEmpty)
+        #expect(shrunk.allSatisfy { $0.subtext == "はいいてんき" })
+        #expect(shrunk.contains { $0.text == "今日" })
+
+        setSegment(4)
+        let expanded = candidates()
+        #expect(!expanded.isEmpty)
+        #expect(expanded.allSatisfy { $0.subtext == "いいてんき" })
+        clear_text()
+    }
+
+    // 区切りを動かしたあとに確定すると、文節の読みだけが消え、残りは区切りを変換器に任せて変換し直す
+    @Test func commitAfterMovingBoundaryLeavesRest() {
+        type("kyouhaiitenki")
+        setSegment(3)
+        free(shrink_text(offset: 0))
+        #expect(composingText.convertTarget == "はいいてんき")
+        #expect(segmentSurfaceCount == nil)
+        #expect(!candidates().isEmpty)
+        clear_text()
+    }
+
+    // 文節は 1 文字より短くも、読み全体より長くもならない
+    @Test func segmentIsClampedToReading() {
+        type("kyouha")
+        setSegment(0)
+        #expect(segmentSurfaceCount == 1)
+        #expect(candidates().allSatisfy { $0.subtext == "ょうは" })
+        setSegment(100)
+        #expect(segmentSurfaceCount == 4)
+        #expect(candidates().allSatisfy { $0.subtext.isEmpty })
+        clear_text()
+    }
+
+    // 入力・削除で区切りは変換器に任せる状態へ戻る
+    @Test func typingOrDeletingResetsBoundary() {
+        type("kyouha")
+        setSegment(2)
+        type("i")
+        #expect(segmentSurfaceCount == nil)
+
+        setSegment(2)
+        let cursor = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        free(remove_text(cursorPtr: cursor))
+        cursor.deallocate()
+        #expect(segmentSurfaceCount == nil)
+        clear_text()
+    }
+}
+}

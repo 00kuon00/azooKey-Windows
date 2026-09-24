@@ -11,6 +11,7 @@ use super::{
     full_width::{to_fullwidth, to_halfwidth},
     input_mode::InputMode,
     ipc_service::Candidates,
+    segment::moved_segment_len,
     state::IMEState,
     text_util::{to_half_katakana, to_katakana},
     user_action::{Function, Navigation},
@@ -18,7 +19,7 @@ use super::{
 use windows::Win32::{
     Foundation::WPARAM,
     UI::{
-        Input::KeyboardAndMouse::{VK_CONTROL, VK_DELETE},
+        Input::KeyboardAndMouse::VK_CONTROL,
         TextServices::{ITfComposition, ITfCompositionSink_Impl, ITfContext},
     },
 };
@@ -80,10 +81,15 @@ impl TextServiceFactory {
             return Ok(None);
         };
 
-        // check shortcut keys（Ctrl+Delete だけは候補の学習を忘れる操作として受ける）
-        if VK_CONTROL.is_pressed() && wparam.0 != VK_DELETE.0 as usize {
-            return Ok(None);
-        }
+        // check shortcut keys (Ctrl+Space・Ctrl+Delete だけは IME で受ける)
+        let control_action = if VK_CONTROL.is_pressed() {
+            match UserAction::from_control_key(wparam.0) {
+                Some(action) => Some(action),
+                None => return Ok(None),
+            }
+        } else {
+            None
+        };
 
         #[allow(clippy::let_and_return)]
         let (composition, mode) = {
@@ -93,7 +99,10 @@ impl TextServiceFactory {
             (composition, mode)
         };
 
-        let action = UserAction::try_from(wparam.0)?;
+        let action = match control_action {
+            Some(action) => action,
+            None => UserAction::try_from(wparam.0)?,
+        };
 
         let (transition, actions) = match composition.state {
             CompositionState::None => match action {
@@ -190,6 +199,14 @@ impl TextServiceFactory {
                     CompositionState::Previewing,
                     vec![ClientAction::SetSelection(SetSelectionType::Down)],
                 ),
+                UserAction::ShrinkSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(-1)],
+                ),
+                UserAction::ExpandSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(1)],
+                ),
                 UserAction::Function(key) => match key {
                     Function::Six => (
                         CompositionState::Previewing,
@@ -283,6 +300,14 @@ impl TextServiceFactory {
                 UserAction::Space | UserAction::Tab => (
                     CompositionState::Previewing,
                     vec![ClientAction::SetSelection(SetSelectionType::Down)],
+                ),
+                UserAction::ShrinkSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(-1)],
+                ),
+                UserAction::ExpandSegment => (
+                    CompositionState::Previewing,
+                    vec![ClientAction::MoveSegmentBoundary(1)],
                 ),
                 UserAction::Function(key) => match key {
                     Function::Six => (
@@ -506,6 +531,24 @@ impl TextServiceFactory {
                     raw_hiragana = hiragana.clone();
 
                     self.set_text(&text, &sub_text)?;
+                }
+                ClientAction::MoveSegmentBoundary(delta) => {
+                    converted_by_function_key = false;
+                    let segment_len = moved_segment_len(&raw_hiragana, &suffix, *delta);
+                    candidates = ipc_service.set_segment(segment_len as i32)?;
+                    selection_index = 0;
+
+                    let text = candidates.texts[selection_index as usize].clone();
+                    let sub_text = candidates.sub_texts[selection_index as usize].clone();
+                    corresponding_count = candidates.corresponding_count[selection_index as usize];
+
+                    preview = text.clone();
+                    suffix = sub_text.clone();
+                    raw_hiragana = candidates.hiragana.clone();
+
+                    self.set_text(&text, &sub_text)?;
+                    ipc_service.set_candidates(candidates.texts.clone())?;
+                    ipc_service.set_selection(selection_index as i32)?;
                 }
                 ClientAction::ShrinkText(text) => {
                     converted_by_function_key = false;

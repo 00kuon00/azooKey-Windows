@@ -6,7 +6,7 @@ use shared::proto::azookey_service_server::{AzookeyService, AzookeyServiceServer
 use shared::proto::{
     AppendTextRequest, AppendTextResponse, ClearTextRequest, ClearTextResponse, ComposingText,
     MoveCursorRequest, MoveCursorResponse, RemoveTextRequest, RemoveTextResponse,
-    ShrinkTextRequest, ShrinkTextResponse, Suggestion,
+    SetSegmentRequest, SetSegmentResponse, ShrinkTextRequest, ShrinkTextResponse, Suggestion,
 };
 
 use std::ffi::{c_char, c_int, CStr, CString};
@@ -34,6 +34,7 @@ unsafe extern "C" {
     fn RemoveText(cursorPtr: *mut c_int) -> *mut c_char;
     fn MoveCursor(offset: c_int, cursorPtr: *mut c_int) -> *mut c_char;
     fn ShrinkText(offset: c_int) -> *mut c_char;
+    fn SetSegmentSurfaceCount(count: c_int) -> *mut c_char;
     fn ClearText();
     fn GetComposedText(lengthPtr: *mut c_int) -> *mut *mut FFICandidate;
     fn LoadConfig();
@@ -243,6 +244,24 @@ impl AzookeyService for MyAzookeyService {
         Ok(Response::new(ShrinkTextResponse {
             composing_text: Some(ComposingText {
                 hiragana: composing_text.text,
+                suggestions: get_composed_text().to_vec(),
+            }),
+        }))
+    }
+
+    async fn set_segment(
+        &self,
+        request: Request<SetSegmentRequest>,
+    ) -> Result<Response<SetSegmentResponse>, Status> {
+        let surface_count = request.into_inner().surface_count;
+        let hiragana = unsafe {
+            let result = SetSegmentSurfaceCount(surface_count);
+            CStr::from_ptr(result).to_string_lossy().into_owned()
+        };
+
+        Ok(Response::new(SetSegmentResponse {
+            composing_text: Some(ComposingText {
+                hiragana,
                 suggestions: get_composed_text().to_vec(),
             }),
         }))
