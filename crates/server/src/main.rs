@@ -42,6 +42,7 @@ unsafe extern "C" {
     fn ResetLearning();
     fn ForgetCandidate(text: *const c_char) -> *mut c_char;
     fn GetUnregisteredUserDictionaryEntries() -> *mut c_char;
+    fn StartReconversion(surface: *const c_char) -> *mut c_char;
 }
 
 #[derive(serde::Deserialize)]
@@ -160,6 +161,14 @@ fn get_composed_text() -> Vec<Suggestion> {
         }
 
         suggestions
+    }
+}
+
+/// 入力中の文字列を `surface` の読みにする。返り値は読み（推定できなければ空）
+fn start_reconversion(surface: &CStr) -> String {
+    unsafe {
+        let result = StartReconversion(surface.as_ptr());
+        CStr::from_ptr(result).to_string_lossy().into_owned()
     }
 }
 
@@ -328,6 +337,28 @@ impl AzookeyService for MyAzookeyService {
             composing_text: Some(ComposingText {
                 hiragana,
                 suggestions: get_composed_text(),
+            }),
+        }))
+    }
+
+    async fn start_reconversion(
+        &self,
+        request: Request<shared::proto::StartReconversionRequest>,
+    ) -> Result<Response<shared::proto::StartReconversionResponse>, Status> {
+        let text = request.into_inner().text;
+        let text = CString::new(text).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let hiragana = start_reconversion(&text);
+        // 読みが無ければ変換しない（空の入力で変換すると候補の取り出しが失敗する）
+        let suggestions = if hiragana.is_empty() {
+            vec![]
+        } else {
+            get_composed_text()
+        };
+
+        Ok(Response::new(shared::proto::StartReconversionResponse {
+            composing_text: Some(ComposingText {
+                hiragana,
+                suggestions,
             }),
         }))
     }

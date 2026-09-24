@@ -452,3 +452,105 @@ extension GlobalStateTests {
     }
 }
 }
+
+// 再変換の読みの推定（システム辞書を逆引きする）
+@Suite struct ReadingInferenceTests {
+    static let index: ReadingIndex = {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let loudsURL = root
+            .appendingPathComponent("azooKey_dictionary_storage")
+            .appendingPathComponent("Dictionary")
+            .appendingPathComponent("louds", isDirectory: true)
+        return ReadingIndex(files: ReadingIndex.loadFiles(in: loudsURL))
+    }()
+
+    // 辞書にある語はその読みになる
+    @Test func wordInDictionary() {
+        #expect(inferReadings(for: "漢字", index: Self.index).first == "かんじ")
+        #expect(inferReadings(for: "変換", index: Self.index).contains("へんかん"))
+    }
+
+    // かなだけならカタカナをひらがなにするだけ
+    @Test func kanaOnly() {
+        #expect(inferReadings(for: "ひらがな", index: Self.index) == ["ひらがな"])
+        #expect(inferReadings(for: "カタカナ", index: Self.index) == ["かたかな"])
+    }
+
+    // 辞書に 1 語として無い文字列は、語とかなに分けて読みをつなぐ
+    @Test func phraseIsSplitIntoWords() {
+        let readings = inferReadings(for: "漢字を変換する", index: Self.index)
+        #expect(readings == ["かんじをへんかんする"])
+    }
+
+    // 空・長すぎる文字列は推定しない
+    @Test func emptyOrTooLong() {
+        #expect(inferReadings(for: "", index: Self.index).isEmpty)
+        #expect(inferReadings(for: String(repeating: "漢", count: maxReconversionSurfaceLength + 1), index: Self.index).isEmpty)
+    }
+
+    // 辞書の読み込みと逆引き 1 回の時間を測る（PR に書く）
+    @Test func lookupTime() {
+        let clock = ContinuousClock()
+        let loadTime = clock.measure {
+            _ = Self.index
+        }
+        print("reconversion dictionary load (first use): \(loadTime)")
+        let lookupTime = clock.measure {
+            _ = inferReadings(for: "今日は良い天気です", index: Self.index)
+        }
+        print("reconversion reading lookup: \(lookupTime)")
+    }
+}
+
+extension GlobalStateTests {
+@MainActor @Suite struct ReconversionTests {
+    init() {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        execURL = root.appendingPathComponent("azooKey_emoji_dictionary_storage")
+        config["enable"] = false
+        config["profile"] = ""
+        config["context"] = ""
+        learningType = .nothing
+        let workURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-reconversion-test-\(UUID().uuidString)", isDirectory: true)
+        memoryDirectoryURL = workURL.appendingPathComponent("memory", isDirectory: true)
+        userDictionaryURL = workURL.appendingPathComponent("user_dictionary", isDirectory: true)
+        systemDictionaryURL = root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary")
+        converter = KanaKanjiConverter(dictionaryURL: systemDictionaryURL, preloadDictionary: false)
+        composingText = ComposingText()
+    }
+
+    func candidates() -> [String] {
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        let list = get_composed_text(lengthPtr: length)
+        return (0..<length.pointee).map { String(cString: list[$0]!.pointee.text) }
+    }
+
+    // 確定済みの文字列を読みに戻し、候補に元の文字列が出る
+    @Test func startReconversionSetsReadingAndOriginalIsACandidate() {
+        let hiragana = "漢字".withCString { pointer in
+            let result = start_reconversion(surface: pointer)
+            defer { free(result) }
+            return String(cString: result)
+        }
+        #expect(hiragana == "かんじ")
+        #expect(composingText.convertTarget == "かんじ")
+        #expect(candidates().contains("漢字"))
+        clear_text()
+    }
+
+    // 読みが推定できなければ入力中の文字列は空のまま
+    @Test func unknownSurfaceLeavesCompositionEmpty() {
+        composingText.insertAtCursorPosition("a", inputStyle: .roman2kana)
+        #expect(startReconversion(surface: "") == "")
+        #expect(composingText.convertTarget.isEmpty)
+    }
+}
+}

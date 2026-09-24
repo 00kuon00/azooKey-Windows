@@ -102,6 +102,15 @@ message ForgetCandidateResponse {
   ComposingText composing_text = 1;
 }
 
+// 確定済みの文字列を再変換する。サーバは読みを推定し、入力中の文字列をその読みにして候補を返す
+message StartReconversionRequest {
+  string text = 1; // 再変換する文字列（選択範囲）
+}
+message StartReconversionResponse {
+  // hiragana は推定した読み。推定できなければ hiragana は空で候補も無い
+  ComposingText composing_text = 1;
+}
+
 
 // Service definition for text editing operations.
 service AzookeyService {
@@ -116,4 +125,5 @@ service AzookeyService {
   rpc CommitCandidate (CommitCandidateRequest) returns (CommitCandidateResponse);
   rpc ResetLearning (ResetLearningRequest) returns (ResetLearningResponse);
   rpc ForgetCandidate (ForgetCandidateRequest) returns (ForgetCandidateResponse);
+  rpc StartReconversion (StartReconversionRequest) returns (StartReconversionResponse);
 }
