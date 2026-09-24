@@ -85,6 +85,14 @@ message CommitCandidateResponse {}
 message ResetLearningRequest {}
 message ResetLearningResponse {}
 
+// 候補の学習だけを忘れる（候補選択中の Ctrl+Delete）。入力中の文字列はそのままで、候補を取り直して返す
+message ForgetCandidateRequest {
+  string text = 1; // 忘れる候補の文字列（Suggestion.text）
+}
+message ForgetCandidateResponse {
+  ComposingText composing_text = 1;
+}
+
 
 // Service definition for text editing operations.
 service AzookeyService {
@@ -97,4 +105,5 @@ service AzookeyService {
   rpc UpdateConfig (UpdateConfigRequest) returns (UpdateConfigResponse);
   rpc CommitCandidate (CommitCandidateRequest) returns (CommitCandidateResponse);
   rpc ResetLearning (ResetLearningRequest) returns (ResetLearningResponse);
+  rpc ForgetCandidate (ForgetCandidateRequest) returns (ForgetCandidateResponse);
 }
