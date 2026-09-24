@@ -1,7 +1,7 @@
 mod ipc;
 
 use serde::{Deserialize, Serialize};
-use shared::AppConfig;
+use shared::{AppConfig, UserDictionaryEntry};
 use std::{path::PathBuf, sync::Mutex};
 
 #[derive(Debug)]
@@ -37,6 +37,37 @@ fn update_config(state: tauri::State<AppState>, new_config: AppConfig) {
     config.write();
 
     state.ipc.clone().update_config().unwrap();
+}
+
+#[derive(Debug, Serialize)]
+struct UserDictionary {
+    entries: Vec<UserDictionaryEntry>,
+    // 読みに辞書で使えない文字があって、変換に使えなかった語
+    unregistered: Vec<UserDictionaryEntry>,
+}
+
+#[tauri::command]
+fn get_user_dictionary(state: tauri::State<AppState>) -> Result<UserDictionary, String> {
+    let entries = UserDictionaryEntry::read_all().map_err(|e| e.to_string())?;
+    // 元データが前回と同じならサーバは作り直さず、前回の結果を返す
+    let unregistered = state
+        .ipc
+        .clone()
+        .update_config()
+        .map_err(|e| e.to_string())?;
+    Ok(UserDictionary {
+        entries,
+        unregistered,
+    })
+}
+
+#[tauri::command]
+fn save_user_dictionary(
+    state: tauri::State<AppState>,
+    entries: Vec<UserDictionaryEntry>,
+) -> Result<Vec<UserDictionaryEntry>, String> {
+    UserDictionaryEntry::write_all(&entries).map_err(|e| e.to_string())?;
+    state.ipc.clone().update_config().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -108,6 +139,8 @@ pub fn run() {
             get_config,
             update_config,
             reset_learning,
+            get_user_dictionary,
+            save_user_dictionary,
             check_capability
         ])
         .run(tauri::generate_context!())

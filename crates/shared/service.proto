@@ -63,8 +63,17 @@ message SetContextRequest {
 
 message SetContextResponse {}
 
+// ユーザー辞書の 1 語（%APPDATA%\Azookey\user_dictionary.json の要素と同じ形）
+message UserDictionaryEntry {
+  string reading = 1; // 読み（ひらがな）
+  string word = 2;    // 単語
+}
+
 message UpdateConfigRequest {}
-message UpdateConfigResponse {}
+message UpdateConfigResponse {
+  // ユーザー辞書を作り直したとき、読みに辞書で使えない文字があって登録できなかった語
+  repeated UserDictionaryEntry unregistered_user_dictionary_entries = 1;
+}
 
 // 候補が確定したことを伝える（学習に使う）
 message CommitCandidateRequest {

@@ -19,11 +19,48 @@ import ffi
 // 直近の GetComposedText で返した候補。確定の知らせ（CommitCandidate）を受けたとき、表示文字列から Candidate を引く
 @MainActor var lastCandidates: [(text: String, candidate: Candidate)] = []
 
-func defaultMemoryDirectoryURL() -> URL {
+// システム辞書の場所。Initialize で execURL から決まる（テストでは差し替える）
+@MainActor var systemDictionaryURL = URL(filePath: "")
+// ユーザー辞書の元データ（%APPDATA%\Azookey\user_dictionary.json）と、それから作る辞書（%APPDATA%\Azookey\user_dictionary）
+@MainActor var userDictionarySourceURL: URL = azookeyAppDataURL().appendingPathComponent("user_dictionary.json")
+@MainActor var userDictionaryURL: URL = azookeyAppDataURL().appendingPathComponent("user_dictionary", isDirectory: true)
+// 前回ユーザー辞書を作ったときの元データ。同じなら作り直さない（UpdateConfig は他の設定の変更でも届く）
+@MainActor var lastUserDictionarySource: Data?
+// 前回作ったときに登録できなかった語
+@MainActor var unregisteredUserDictionaryEntries: [UserDictionaryEntry] = []
+
+func azookeyAppDataURL() -> URL {
     let appData = ProcessInfo.processInfo.environment["APPDATA"] ?? "."
-    return URL(filePath: appData)
-        .appendingPathComponent("Azookey")
-        .appendingPathComponent("memory", isDirectory: true)
+    return URL(filePath: appData).appendingPathComponent("Azookey", isDirectory: true)
+}
+
+func defaultMemoryDirectoryURL() -> URL {
+    azookeyAppDataURL().appendingPathComponent("memory", isDirectory: true)
+}
+
+/// 元データが前回と変わっていれば、ユーザー辞書を作り直して変換器に読み直させる
+@MainActor func reloadUserDictionary() {
+    // 元データが無いときは空の辞書にする
+    let source = (try? Data(contentsOf: userDictionarySourceURL)) ?? Data()
+    if source == lastUserDictionarySource {
+        return
+    }
+    do {
+        let entries = source.isEmpty ? [] : try JSONDecoder().decode([UserDictionaryEntry].self, from: source)
+        unregisteredUserDictionaryEntries = try buildUserDictionary(
+            entries: entries,
+            dictionaryURL: systemDictionaryURL,
+            outputURL: userDictionaryURL
+        )
+        lastUserDictionarySource = source
+    } catch {
+        // 読めない・作れないときは前の辞書のまま使う
+        print("Failed to build user dictionary: \(error)")
+        return
+    }
+    // 同じ場所に作り直すので、forceReload で読み込み済みの辞書を捨てさせる
+    converter.updateUserDictionaryURL(userDictionaryURL, forceReload: true)
+    converter.stopComposition()
 }
 
 func parseLearningType(_ mode: String) -> LearningType? {
@@ -44,7 +81,8 @@ func parseLearningType(_ mode: String) -> LearningType? {
         keyboardLanguage: .ja_JP,
         learningType: learningType,
         memoryDirectoryURL: memoryDirectoryURL,
-        sharedContainerURL: URL(filePath: "./test"),
+        // ユーザー辞書（user.louds など）の場所。エンジンは変換のたびにここを見る
+        sharedContainerURL: userDictionaryURL,
         textReplacer: .init {
             return execURL.appendingPathComponent("EmojiDictionary").appendingPathComponent("emoji_all_E15.1.txt")
         },
@@ -124,6 +162,10 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
             print("Failed to read settings: \(error)")
         }
     }
+    // Initialize の中では変換器を作る前に呼ばれる。そのときは変換器を作ったあとで読む
+    if converter != nil {
+        reloadUserDictionary()
+    }
 }
 
 @_silgen_name("Initialize")
@@ -136,10 +178,12 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
 
     load_config()
 
+    systemDictionaryURL = execURL.appendingPathComponent("Dictionary")
     converter = KanaKanjiConverter(
-        dictionaryURL: execURL.appendingPathComponent("Dictionary"),
+        dictionaryURL: systemDictionaryURL,
         preloadDictionary: true
     )
+    reloadUserDictionary()
     composingText.insertAtCursorPosition("a", inputStyle: .roman2kana)
     converter.requestCandidates(composingText, options: getOptions())
     composingText = ComposingText()
@@ -299,6 +343,13 @@ func shouldLearn(_ text: String) -> Bool {
     }
     converter.updateLearningData(candidate)
     converter.commitUpdateLearningData()
+}
+
+/// 直近のユーザー辞書の作り直しで登録できなかった語を JSON（`[{"reading": ..., "word": ...}]`）で返す
+@_silgen_name("GetUnregisteredUserDictionaryEntries")
+@MainActor public func get_unregistered_user_dictionary_entries() -> UnsafeMutablePointer<CChar> {
+    let data = (try? JSONEncoder().encode(unregisteredUserDictionaryEntries)) ?? Data("[]".utf8)
+    return _strdup(String(decoding: data, as: UTF8.self))!
 }
 
 /// 学習をすべて消す
