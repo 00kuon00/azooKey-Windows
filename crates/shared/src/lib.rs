@@ -22,10 +22,28 @@ pub struct ZenzaiConfig {
     pub backend: String,
 }
 
+// 学習の設定。mode は変換エンジンの LearningType と同じ名前
+// （inputAndOutput = 学習する / onlyOutput = 新しく学習しない / nothing = 学習しない）
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LearningConfig {
+    pub mode: String,
+}
+
+impl Default for LearningConfig {
+    fn default() -> Self {
+        LearningConfig {
+            mode: "inputAndOutput".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AppConfig {
     pub version: String,
     pub zenzai: ZenzaiConfig,
+    // 学習の設定が無い古い settings.json も読めるようにする
+    #[serde(default)]
+    pub learning: LearningConfig,
 }
 
 impl Default for AppConfig {
@@ -37,6 +55,7 @@ impl Default for AppConfig {
                 profile: "".to_string(),
                 backend: "cpu".to_string(),
             },
+            learning: LearningConfig::default(),
         }
     }
 }

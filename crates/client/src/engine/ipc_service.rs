@@ -200,6 +200,16 @@ impl IPCService {
         Ok(candidates)
     }
 
+    #[tracing::instrument]
+    pub fn commit_candidate(&mut self, text: String) -> anyhow::Result<()> {
+        let request = tonic::Request::new(shared::proto::CommitCandidateRequest { text });
+        self.runtime
+            .clone()
+            .block_on(self.azookey_client.commit_candidate(request))?;
+
+        Ok(())
+    }
+
     pub fn set_context(&mut self, context: String) -> anyhow::Result<()> {
         let request = tonic::Request::new(shared::proto::SetContextRequest { context });
         let _response = self
