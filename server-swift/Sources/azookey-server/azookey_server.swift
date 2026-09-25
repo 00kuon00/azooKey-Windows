@@ -10,6 +10,7 @@ import ffi
 @MainActor var config: [String : Any] = [
     "enable": false,
     "profile": "",
+    "backend": "cpu",
 ]
 
 // 学習の設定（settings.json の learning.mode）。既定は学習する
@@ -72,6 +73,17 @@ func parseLearningType(_ mode: String) -> LearningType? {
     case "onlyOutput": return .onlyOutput
     case "nothing": return .nothing
     default: return nil
+    }
+}
+
+/// settings.json の zenzai.backend から、Zenzai のモデルを GPU に載せる層の数を決める。
+/// どの llama.dll（llama_cpu / llama_cuda / llama_vulkan）を読むかはランチャーが起動時に PATH で決めるので、
+/// ここで決めた数も起動時（Initialize）にだけ渡す
+func gpuLayerCount(backend: String) -> Int32 {
+    switch backend {
+    // llama.cpp はモデルの層数 + 1（出力層）に切り詰めるので、多めの値で全層を載せる
+    case "vulkan", "cuda": return 999
+    default: return 0
     }
 }
 
@@ -156,6 +168,10 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
                 if let profileValue = zenzaiDict["profile"] as? String {
                     config["profile"] = profileValue
                 }
+
+                if let backendValue = zenzaiDict["backend"] as? String {
+                    config["backend"] = backendValue
+                }
             }
 
             // learning が無い（古い settings.json）ときは既定の「学習する」
@@ -180,6 +196,8 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
     execURL = URL(filePath: path)
 
     load_config()
+    // Zenzai のモデルは最初の変換で読み込まれるので、変換器を作る前に渡しておく
+    KanaKanjiConverterEngineRuntime.configure(gpuLayerCount: gpuLayerCount(backend: config["backend"] as! String))
 
     systemDictionaryURL = execURL.appendingPathComponent("Dictionary")
     converter = KanaKanjiConverter(

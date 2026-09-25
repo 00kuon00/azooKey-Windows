@@ -587,6 +587,9 @@ struct ZenzaiSessionTests {
         memoryDirectoryURL = workURL.appendingPathComponent("memory", isDirectory: true)
         userDictionaryURL = workURL.appendingPathComponent("user_dictionary", isDirectory: true)
         dictionaryURL = root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary")
+        // GPU に載せる層の数（計測用）。どの llama.dll を読むかは PATH の llama_cpu / llama_vulkan / llama_cuda で決まる
+        let gpuLayers = ProcessInfo.processInfo.environment["AZOOKEY_GPU_LAYERS"].flatMap { Int32($0) } ?? 0
+        KanaKanjiConverterEngineRuntime.configure(gpuLayerCount: gpuLayers)
         converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
         composingText = ComposingText()
     }
@@ -677,5 +680,49 @@ struct ZenzaiSessionTests {
         print("ZENZAI-BENCH [\(label)] ClearText: \(summary(clears))")
         print("ZENZAI-BENCH [\(label)] first conversion after commit: \(summary(firsts))")
     }
+
+    // 変換 1 回（1 文字入力するごとの GetComposedText）の時間を測る（合否は付けない。結果は出力に書く）。
+    // GPU に載せる層の数は AZOOKEY_GPU_LAYERS、バックエンドは PATH の llama.dll で切り替えて、プロセスごとに 1 通り測る
+    @Test func measureConversionTime() {
+        let sentences = ["kyouhaiitenkidesune", "kanjihenkanwosuru", "asitanoyoteiwokakunin", "zenzaiwotukau", "nihongonyuuryoku"]
+        // 読み込みと最初の変換を済ませておく（モデルの読み込みの時間も出す）
+        let loadStart = Date()
+        commitFirstAndClear(type("junbi").candidates)
+        let load = -loadStart.timeIntervalSinceNow
+
+        var all: [Double] = []
+        var lasts: [Double] = []
+        for round in 0..<10 {
+            let roman = sentences[round % sentences.count]
+            for character in roman {
+                let cursor = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+                free(append_text(input: String(character), cursorPtr: cursor))
+                cursor.deallocate()
+                let start = Date()
+                _ = candidates()
+                all.append(-start.timeIntervalSinceNow)
+            }
+            lasts.append(all.last!)
+            clear_text()
+        }
+        func summary(_ values: [Double]) -> String {
+            let sorted = values.sorted()
+            let median = sorted[sorted.count / 2]
+            return String(format: "median %.1f ms / max %.1f ms (n=%d)", median * 1000, sorted.last! * 1000, sorted.count)
+        }
+        let layers = ProcessInfo.processInfo.environment["AZOOKEY_GPU_LAYERS"] ?? "0"
+        print("ZENZAI-BENCH [gpu layers \(layers)] load and first input: \(String(format: "%.1f ms", load * 1000))")
+        print("ZENZAI-BENCH [gpu layers \(layers)] every keystroke: \(summary(all))")
+        print("ZENZAI-BENCH [gpu layers \(layers)] whole sentence: \(summary(lasts))")
+    }
 }
+}
+
+@Test func gpuLayerCountFollowsBackend() {
+    #expect(gpuLayerCount(backend: "cpu") == 0)
+    #expect(gpuLayerCount(backend: "vulkan") == 999)
+    #expect(gpuLayerCount(backend: "cuda") == 999)
+    // 知らない値・空は CPU と同じ（ランチャーも llama_cpu を選ぶ）
+    #expect(gpuLayerCount(backend: "") == 0)
+    #expect(gpuLayerCount(backend: "metal") == 0)
 }
