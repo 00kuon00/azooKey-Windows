@@ -32,6 +32,22 @@ jobs:
         $destination = "$SwiftPath\share\ucrt.modulemap"
         Invoke-WebRequest -Uri $modulemapUrl -OutFile $destination
     
+    - name: Set up engine deploy key
+      # 変換エンジン（00kuon00/AzooKeyKanaKanjiConverter）は非公開なので、読み取り専用のデプロイキーで取る。
+      # GITHUB_TOKEN はこのリポジトリにしか使えない
+      shell: pwsh
+      env:
+        ENGINE_DEPLOY_KEY: ${{ secrets.ENGINE_DEPLOY_KEY }}
+      run: |
+        $keyPath = "$env:RUNNER_TEMP\engine_deploy_key"
+        # 改行を LF に揃える（CRLF だと ssh が鍵を読めない）
+        [IO.File]::WriteAllText($keyPath, ($env:ENGINE_DEPLOY_KEY -replace "`r", "") + "`n")
+        # 本人以外が読める鍵は ssh に拒まれる
+        icacls $keyPath /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+        $sshKey = $keyPath.Replace('\', '/')
+        git config --global core.sshCommand "ssh -i '$sshKey' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+        git config --global "url.git@github.com:00kuon00/AzooKeyKanaKanjiConverter.insteadOf" "https://github.com/00kuon00/AzooKeyKanaKanjiConverter"
+
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
       with:
