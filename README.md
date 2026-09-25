@@ -110,6 +110,7 @@ regsvr32.exe "path/to/build/x86/azookey_windows.dll" /s
 #### 開発時のヒント
 - 開発は仮想マシンまたは専用のPCで行うことを推奨します。IMEがクラッシュするとWindowsがフリーズする可能性があります。
 - IMEを解除する際、IMEを使用中のアプリケーション（メモ帳など）を終了しないと、解除できないことがあります。
+- 常駐プロセス（`launcher.exe`・`azookey-server.exe`・`ui.exe`）は管理者権限で動くので、止めるには `scripts\stop-azookey.cmd` をダブルクリックします（UAC の確認が 1 回出ます）。`scripts\stop-azookey.cmd -Start` で、タスク「Azookey Startup」から起動し直します。インストール済みのファイルを差し替えたり、インストーラを実行し直したりする前に止めてください。
 
 # 関連
 
