@@ -554,3 +554,127 @@ extension GlobalStateTests {
     }
 }
 }
+
+// Zenzai を有効にした変換。zenz.gguf が要るので、環境変数 AZOOKEY_ZENZ_GGUF にその場所を渡したときだけ走らせる
+// （例: AZOOKEY_ZENZ_GGUF=<リポジトリ>\zenz.gguf swift test --filter ZenzaiSessionTests）
+extension GlobalStateTests {
+@MainActor @Suite(.enabled(if: ProcessInfo.processInfo.environment["AZOOKEY_ZENZ_GGUF"] != nil))
+struct ZenzaiSessionTests {
+    let workURL: URL
+
+    init() throws {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        workURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-zenzai-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workURL, withIntermediateDirectories: true)
+        // getOptions は execURL の下の zenz.gguf と EmojiDictionary を見るので、両方を置いた場所を execURL にする
+        let gguf = URL(filePath: ProcessInfo.processInfo.environment["AZOOKEY_ZENZ_GGUF"]!)
+        try FileManager.default.copyItem(at: gguf, to: workURL.appendingPathComponent("zenz.gguf"))
+        try FileManager.default.copyItem(
+            at: root.appendingPathComponent("azooKey_emoji_dictionary_storage").appendingPathComponent("EmojiDictionary"),
+            to: workURL.appendingPathComponent("EmojiDictionary")
+        )
+        execURL = workURL
+        config["enable"] = true
+        config["profile"] = ""
+        config["context"] = ""
+        // 学習で順位が変わらないようにする（比べたいのは変換器の状態の持ち越しだけ）
+        learningType = .nothing
+        memoryDirectoryURL = workURL.appendingPathComponent("memory", isDirectory: true)
+        userDictionaryURL = workURL.appendingPathComponent("user_dictionary", isDirectory: true)
+        converter = KanaKanjiConverter(
+            dictionaryURL: root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary"),
+            preloadDictionary: false
+        )
+        composingText = ComposingText()
+    }
+
+    func candidates() -> [String] {
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        let list = get_composed_text(lengthPtr: length)
+        return (0..<length.pointee).map { String(cString: list[$0]!.pointee.text) }
+    }
+
+    /// クライアントと同じく 1 文字ごとに変換し、最後の候補と、最初の 1 文字の変換にかかった秒数を返す
+    func type(_ roman: String) -> (candidates: [String], firstConversion: Double) {
+        var result: [String] = []
+        var firstConversion = 0.0
+        for (i, character) in roman.enumerated() {
+            let cursor = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+            free(append_text(input: String(character), cursorPtr: cursor))
+            cursor.deallocate()
+            let start = Date()
+            result = candidates()
+            if i == 0 {
+                firstConversion = -start.timeIntervalSinceNow
+            }
+        }
+        return (result, firstConversion)
+    }
+
+    func commitFirstAndClear(_ candidates: [String]) {
+        if let first = candidates.first {
+            first.withCString { commit_candidate(text: $0) }
+        }
+        clear_text()
+    }
+
+    // 確定のあとで続けて入力しても、変換器を新しくしたときと同じ候補が出る（前の入力の結果に引きずられない）
+    @Test func conversionAfterCommitMatchesFreshConversion() {
+        // 前の入力の読みが次の入力の読みの頭になる組（前の入力の 1 位を次の入力の制約に使い回していないか）
+        let pairs = [("kyou", "kyouto"), ("kanji", "kanjiru"), ("hasi", "hasiru"), ("kouen", "kouennkai")]
+        for (previous, next) in pairs {
+            converter.stopComposition()
+            commitFirstAndClear(type(previous).candidates)
+            let carried = type(next).candidates
+            clear_text()
+
+            converter.stopComposition()
+            let fresh = type(next).candidates
+            clear_text()
+
+            #expect(carried.first == fresh.first, "\(previous) → \(next)")
+        }
+    }
+
+    // 確定直後の最初の変換の時間を測る（合否は付けない。結果は出力に書く）。
+    // 文脈あり: クライアントと同じく、カーソルの前の文字列（確定した文字列を足していった末尾 64 文字）を文脈に渡す
+    @Test(arguments: [false, true]) func measureFirstConversionAfterCommit(withContext: Bool) {
+        var preceding = "明日の会議の資料をまとめてから、午後に打ち合わせの予定を確認します。"
+        config["context"] = withContext ? preceding : ""
+        let sentences = ["kyouhaiitenkidesune", "kanjihenkanwosuru", "asitanoyoteiwokakunin", "zenzaiwotukau", "nihongonyuuryoku"]
+        // 読み込みと最初の変換を済ませておく
+        commitFirstAndClear(type("junbi").candidates)
+
+        var clears: [Double] = []
+        var firsts: [Double] = []
+        for round in 0..<20 {
+            let (candidates, first) = type(sentences[round % sentences.count])
+            firsts.append(first)
+            if let text = candidates.first {
+                text.withCString { commit_candidate(text: $0) }
+                if withContext {
+                    preceding = String((preceding + text).suffix(64))
+                    config["context"] = preceding
+                }
+            }
+            let start = Date()
+            clear_text()
+            clears.append(-start.timeIntervalSinceNow)
+        }
+        // 1 周目の最初の変換は準備の入力のあとなので、どちらも同じ条件で比べられる
+        func summary(_ values: [Double]) -> String {
+            let sorted = values.sorted()
+            let median = sorted[sorted.count / 2]
+            return String(format: "median %.1f ms / max %.1f ms (n=%d)", median * 1000, sorted.last! * 1000, sorted.count)
+        }
+        let label = withContext ? "context" : "no context"
+        print("ZENZAI-BENCH [\(label)] ClearText: \(summary(clears))")
+        print("ZENZAI-BENCH [\(label)] first conversion after commit: \(summary(firsts))")
+    }
+}
+}
