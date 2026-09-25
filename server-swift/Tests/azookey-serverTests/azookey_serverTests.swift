@@ -561,6 +561,7 @@ extension GlobalStateTests {
 @MainActor @Suite(.enabled(if: ProcessInfo.processInfo.environment["AZOOKEY_ZENZ_GGUF"] != nil))
 struct ZenzaiSessionTests {
     let workURL: URL
+    let dictionaryURL: URL
 
     init() throws {
         let root = URL(filePath: #filePath)
@@ -585,10 +586,8 @@ struct ZenzaiSessionTests {
         learningType = .nothing
         memoryDirectoryURL = workURL.appendingPathComponent("memory", isDirectory: true)
         userDictionaryURL = workURL.appendingPathComponent("user_dictionary", isDirectory: true)
-        converter = KanaKanjiConverter(
-            dictionaryURL: root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary"),
-            preloadDictionary: false
-        )
+        dictionaryURL = root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary")
+        converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
         composingText = ComposingText()
     }
 
@@ -623,17 +622,18 @@ struct ZenzaiSessionTests {
         clear_text()
     }
 
-    // 確定のあとで続けて入力しても、変換器を新しくしたときと同じ候補が出る（前の入力の結果に引きずられない）
+    // 確定のあとで続けて入力しても、変換器（と llama context）を新しく作ったときと同じ候補が出る。
+    // 前の入力の変換結果や KV キャッシュに引きずられないこと
     @Test func conversionAfterCommitMatchesFreshConversion() {
         // 前の入力の読みが次の入力の読みの頭になる組（前の入力の 1 位を次の入力の制約に使い回していないか）
         let pairs = [("kyou", "kyouto"), ("kanji", "kanjiru"), ("hasi", "hasiru"), ("kouen", "kouennkai")]
         for (previous, next) in pairs {
-            converter.stopComposition()
+            converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
             commitFirstAndClear(type(previous).candidates)
             let carried = type(next).candidates
             clear_text()
 
-            converter.stopComposition()
+            converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
             let fresh = type(next).candidates
             clear_text()
 
@@ -655,6 +655,7 @@ struct ZenzaiSessionTests {
         for round in 0..<20 {
             let (candidates, first) = type(sentences[round % sentences.count])
             firsts.append(first)
+            print("ZENZAI-BENCH candidate: \(sentences[round % sentences.count]) → \(candidates.first ?? "")")
             if let text = candidates.first {
                 text.withCString { commit_candidate(text: $0) }
                 if withContext {
