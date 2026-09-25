@@ -46,7 +46,11 @@ jobs:
         $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
         icacls $keyPath /inheritance:r /grant:r "${me}:F"
         $sshKey = $keyPath.Replace('\', '/')
-        git config --global core.sshCommand "ssh -i '$sshKey' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+        # SwiftPM は GIT_SSH_COMMAND が無いと自分で "ssh -oBatchMode=yes" を入れ、core.sshCommand より優先されて鍵の指定が消える。
+        # 環境変数で渡し、後の手順（Build）にも引き継ぐ
+        $sshCommand = "ssh -i '$sshKey' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+        $env:GIT_SSH_COMMAND = $sshCommand
+        "GIT_SSH_COMMAND=$sshCommand" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         git config --global "url.git@github.com:00kuon00/AzooKeyKanaKanjiConverter.insteadOf" "https://github.com/00kuon00/AzooKeyKanaKanjiConverter"
         # 取れるかをここで確かめる（失敗するとビルドの途中まで進んでから落ちるため）
         git ls-remote https://github.com/00kuon00/AzooKeyKanaKanjiConverter HEAD
