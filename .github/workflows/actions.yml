@@ -42,11 +42,15 @@ jobs:
         $keyPath = "$env:RUNNER_TEMP\engine_deploy_key"
         # 改行を LF に揃える（CRLF だと ssh が鍵を読めない）
         [IO.File]::WriteAllText($keyPath, ($env:ENGINE_DEPLOY_KEY -replace "`r", "") + "`n")
-        # 本人以外が読める鍵は ssh に拒まれる
-        icacls $keyPath /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+        # 本人以外が読める鍵は ssh に拒まれる。ランナーの $env:USERNAME は SYSTEM で実際のユーザーと違うので使わない
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        icacls $keyPath /inheritance:r /grant:r "${me}:F"
         $sshKey = $keyPath.Replace('\', '/')
         git config --global core.sshCommand "ssh -i '$sshKey' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
         git config --global "url.git@github.com:00kuon00/AzooKeyKanaKanjiConverter.insteadOf" "https://github.com/00kuon00/AzooKeyKanaKanjiConverter"
+        # 取れるかをここで確かめる（失敗するとビルドの途中まで進んでから落ちるため）
+        git ls-remote https://github.com/00kuon00/AzooKeyKanaKanjiConverter HEAD
+        if ($LASTEXITCODE -ne 0) { throw 'デプロイキーで変換エンジンを取れない' }
 
     - name: Install Protoc
       uses: arduino/setup-protoc@v3
