@@ -1,3 +1,4 @@
+use tao::dpi::{LogicalSize, Size};
 use tao::window::Window;
 use windows::Win32::{
     Foundation::RECT,
@@ -55,4 +56,31 @@ pub fn get_candidate_window_position(
     };
 
     (x as f64, y as f64)
+}
+
+/// 候補ウィンドウの幅（候補の最大文字数から決める）。
+/// 論理ピクセルで返す。物理ピクセルで決めると、表示倍率が高い画面で幅だけ狭くなる（225% で 100 相当）
+pub fn candidate_window_width(max_len: u32) -> Size {
+    Size::Logical(LogicalSize::new(
+        std::cmp::max(225, 120 + max_len * 18) as f64,
+        0.0,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 表示倍率 225% でも、100% のときと同じ見た目の幅になる
+    #[test]
+    fn candidate_width_scales_with_display() {
+        let width = |max_len, scale| {
+            candidate_window_width(max_len)
+                .to_physical::<u32>(scale)
+                .width
+        };
+        assert_eq!(width(0, 1.0), 225);
+        assert_eq!(width(0, 2.25), 506);
+        assert_eq!(width(10, 2.25), 675);
+    }
 }

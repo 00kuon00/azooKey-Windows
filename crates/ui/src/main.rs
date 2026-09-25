@@ -1,11 +1,10 @@
-use std::cmp::max;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use azookey_server::TonicNamedPipeServer;
 use ipc::{WindowAction, WindowController, WindowService};
 use shared::proto::window_service_server::WindowServiceServer;
-use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::platform::windows::{EventLoopBuilderExtWindows, WindowExtWindows};
 use tao::{
     event::{Event, StartCause, WindowEvent},
@@ -15,7 +14,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
 use uiaccess::prepare_uiaccess_token;
-use utils::get_candidate_window_position;
+use utils::{candidate_window_width, get_candidate_window_position};
 use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
 };
@@ -175,8 +174,10 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap();
                 }
                 UserEvent::UpdateHeight(height) => {
-                    let width = candidate_window.inner_size().width as i32;
-                    candidate_window.set_inner_size(LogicalSize::new(width, height));
+                    // 高さは論理ピクセルで届くので、幅も論理ピクセルに揃える
+                    let scale = candidate_window.scale_factor();
+                    let width = candidate_window.inner_size().to_logical::<f64>(scale).width;
+                    candidate_window.set_inner_size(LogicalSize::new(width, height as f64));
                 }
                 UserEvent::WindowAction(action) => {
                     match action {
@@ -265,11 +266,15 @@ async fn main() -> anyhow::Result<()> {
                                 .max()
                                 .unwrap_or(0) as u32;
 
-                            let height = candidate_window.inner_size().height as i32;
-                            candidate_window.set_inner_size(PhysicalSize::new(
-                                max(225, 120 + max_len * 18),
-                                height as u32,
-                            ));
+                            let scale = candidate_window.scale_factor();
+                            let width = candidate_window_width(max_len)
+                                .to_logical::<f64>(scale)
+                                .width;
+                            let height = candidate_window
+                                .inner_size()
+                                .to_logical::<f64>(scale)
+                                .height;
+                            candidate_window.set_inner_size(LogicalSize::new(width, height));
 
                             let candidates = serde_json::to_string(&candidates)
                                 .context("Failed to serialize candidates")
