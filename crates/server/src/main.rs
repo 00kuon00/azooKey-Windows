@@ -13,6 +13,10 @@ use std::ffi::{c_char, c_int, CStr, CString};
 
 const USE_ZENZAI: bool = true;
 
+// Swift の `Int`（64 ビット）。Swift 側が `UnsafeMutablePointer<Int>` で書き込む引数はこの型で受ける。
+// `c_int`（32 ビット）で受けると 8 バイト書き込まれて隣のスタックが壊れ、変換エンジンが落ちる
+type SwiftInt = isize;
+
 struct RawComposingText {
     text: String,
     cursor: i8,
@@ -30,13 +34,13 @@ struct FFICandidate {
 unsafe extern "C" {
     fn Initialize(path: *const c_char, use_zenzai: bool);
     fn SetContext(context: *const c_char);
-    fn AppendText(input: *const c_char, cursorPtr: *mut c_int) -> *mut c_char;
-    fn RemoveText(cursorPtr: *mut c_int) -> *mut c_char;
-    fn MoveCursor(offset: c_int, cursorPtr: *mut c_int) -> *mut c_char;
+    fn AppendText(input: *const c_char, cursorPtr: *mut SwiftInt) -> *mut c_char;
+    fn RemoveText(cursorPtr: *mut SwiftInt) -> *mut c_char;
+    fn MoveCursor(offset: c_int, cursorPtr: *mut SwiftInt) -> *mut c_char;
     fn ShrinkText(offset: c_int) -> *mut c_char;
     fn SetSegmentSurfaceCount(count: c_int) -> *mut c_char;
     fn ClearText();
-    fn GetComposedText(lengthPtr: *mut c_int) -> *mut *mut FFICandidate;
+    fn GetComposedText(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
     fn LoadConfig();
     fn CommitCandidate(text: *const c_char);
     fn ResetLearning();
@@ -77,7 +81,7 @@ fn initialize(path: &str) {
 fn add_text(input: &str) -> RawComposingText {
     unsafe {
         let input = CString::new(input).expect("CString::new failed");
-        let mut cursor: c_int = 0;
+        let mut cursor: SwiftInt = 0;
 
         let result = AppendText(input.as_ptr(), &mut cursor);
 
@@ -94,7 +98,7 @@ fn move_cursor(offset: i8) -> RawComposingText {
     unsafe {
         let offset = c_int::from(offset);
         println!("Offset: {}", offset);
-        let mut cursor: c_int = 0;
+        let mut cursor: SwiftInt = 0;
 
         let result = MoveCursor(offset, &mut cursor);
 
@@ -109,7 +113,7 @@ fn move_cursor(offset: i8) -> RawComposingText {
 
 fn remove_text() -> RawComposingText {
     unsafe {
-        let mut cursor: c_int = 0;
+        let mut cursor: SwiftInt = 0;
 
         let result = RemoveText(&mut cursor);
 
@@ -130,7 +134,7 @@ fn clear_text() {
 
 fn get_composed_text() -> Vec<Suggestion> {
     unsafe {
-        let mut length: c_int = 0;
+        let mut length: SwiftInt = 0;
         let result = GetComposedText(&mut length);
         let mut suggestions = Vec::with_capacity(length as usize);
 
