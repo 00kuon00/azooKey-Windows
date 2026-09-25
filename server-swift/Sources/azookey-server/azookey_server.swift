@@ -235,6 +235,7 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
     lastCandidates = []
     segmentSurfaceCount = nil
     // 入力の区切り。前の入力で確定した語を、次の入力の学習の「直前の語」に持ち越さない
+    // （前回の変換結果も捨てる。Zenzai の llama context は作り直さない版のエンジンを使っている・#13）
     converter.stopComposition()
 }
 

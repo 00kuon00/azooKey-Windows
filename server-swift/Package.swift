@@ -17,10 +17,11 @@ let package = Package(
     dependencies: [
         // Dependencies declare other packages that this package depends on.
         // .package(url: /* package url */, from: "1.0.0"),
-        // c228776 は batao9 のフォークにだけある版（旧辞書 azooKey_dictionary_storage@b05798b の読み込みに対応済み）
+        // batao9 のフォークの c228776（旧辞書 azooKey_dictionary_storage@b05798b の読み込みに対応済み）に、
+        // 確定のたびに Zenzai の context を作り直さない変更（本家 #350 と同じ・#13）を 1 つ足した版
         .package(
-            url: "https://github.com/batao9/AzooKeyKanaKanjiConverter",
-            revision: "c228776b0b869f81ee2a1031ff9dbd679f4b3cd9",
+            url: "https://github.com/00kuon00/AzooKeyKanaKanjiConverter",
+            revision: "54f73ed9d9e50ebbb28473683df9f3a21e441dee",
             traits: ["Zenzai"]
         )
     ],
