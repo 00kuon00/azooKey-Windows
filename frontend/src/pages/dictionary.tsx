@@ -4,6 +4,7 @@ import { BookA, Check, Pencil, Plus, Search, Trash2, TriangleAlert, X } from "lu
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner"
 import { invoke } from '@tauri-apps/api/core';
+import { SuggestionPanel } from "@/pages/dictionary-suggestions";
 
 // %APPDATA%\Azookey\user_dictionary.json の要素と同じ形
 type Entry = { reading: string; word: string };
@@ -285,6 +286,12 @@ export const Dictionary = () => {
                     </div>
                 </section>
             )}
+
+            <SuggestionPanel
+                registered={entries}
+                busy={busy || !loaded}
+                onRegister={(added) => save([...entries, ...added])}
+            />
 
             <section className="space-y-2">
                 <div className="flex items-center justify-between gap-4">

@@ -15,6 +15,13 @@ fn get_config_root() -> PathBuf {
 
 const SETTINGS_FILENAME: &str = "settings.json";
 
+/// 変換エンジン（azookey-server）の名前付きパイプの名前。
+/// 開発中に常駐のエンジンを止めずに自分のビルドを並べて動かせるよう、環境変数 AZOOKEY_PIPE_NAME で変えられる
+/// （変換サーバと設定アプリだけが見る。IME 本体は既定の名前につなぐ）
+pub fn server_pipe_name() -> String {
+    std::env::var("AZOOKEY_PIPE_NAME").unwrap_or_else(|_| "azookey_server".to_string())
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ZenzaiConfig {
     pub enable: bool,
@@ -119,4 +126,35 @@ impl UserDictionaryEntry {
         std::fs::write(&temp, text)?;
         std::fs::rename(&temp, &path)
     }
+}
+
+const REJECTED_SUGGESTIONS_FILENAME: &str = "dictionary_suggestion_rejected.json";
+
+/// ユーザー辞書の登録候補（#17）で却下した語。次からは候補に出さない。
+/// 読みを直せば通る語もあるので、読みではなく語（表記）で覚える。%APPDATA%\Azookey\dictionary_suggestion_rejected.json に配列で置く
+pub fn read_rejected_suggestions() -> std::io::Result<Vec<String>> {
+    let path = get_config_root().join(REJECTED_SUGGESTIONS_FILENAME);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(path)?;
+    serde_json::from_str(&text).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// `words` を却下した語に足す（すでにあるものは足さない）。書き方は `UserDictionaryEntry::write_all` と同じ
+pub fn add_rejected_suggestions(words: &[String]) -> std::io::Result<()> {
+    let mut rejected = read_rejected_suggestions()?;
+    for word in words {
+        if !rejected.contains(word) {
+            rejected.push(word.clone());
+        }
+    }
+    let root = get_config_root();
+    std::fs::create_dir_all(&root)?;
+    let path = root.join(REJECTED_SUGGESTIONS_FILENAME);
+    let temp = root.join(format!("{REJECTED_SUGGESTIONS_FILENAME}.tmp"));
+    let text = serde_json::to_string_pretty(&rejected)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(&temp, text)?;
+    std::fs::rename(&temp, &path)
 }

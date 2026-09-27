@@ -116,6 +116,14 @@ struct ReadingIndex {
 /// - そうでなければ、辞書の語とそれ以外の 1 文字ずつに分ける。分け方は、読みの分からない漢字が少なく、
 ///   区切りが少なく、重みの合計が大きいものを選ぶ
 func inferReadings(for surface: String, index: ReadingIndex) -> [String] {
+    inferReadings(for: surface, lookup: index.lookup)
+}
+
+/// `lookup` は `ReadingIndex.lookup` と同じ形の答えを返すもの（複数の語をまとめて引いた結果を渡せるように・#17）
+func inferReadings(
+    for surface: String,
+    lookup: ([Character]) -> [Range<Int>: [(reading: String, value: Float)]]
+) -> [String] {
     let characters = Array(surface)
     guard !characters.isEmpty, characters.count <= maxReconversionSurfaceLength else {
         return []
@@ -124,7 +132,7 @@ func inferReadings(for surface: String, index: ReadingIndex) -> [String] {
         return [surface.toHiragana()]
     }
 
-    let matches = index.lookup(characters)
+    let matches = lookup(characters)
     if let exact = matches[0..<characters.count] {
         var readings: [String] = []
         for entry in exact.sorted(by: { $0.value > $1.value }) {

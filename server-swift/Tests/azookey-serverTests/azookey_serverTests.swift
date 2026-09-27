@@ -673,6 +673,105 @@ extension GlobalStateTests {
 }
 }
 
+// ユーザー辞書の登録候補（#17）: 登録しなくても変換できる語を落とす判定
+extension GlobalStateTests {
+@MainActor @Suite struct ConvertibilityTests {
+    init() {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        execURL = root.appendingPathComponent("azooKey_emoji_dictionary_storage")
+        config["enable"] = false
+        config["profile"] = ""
+        config["context"] = ""
+        learningType = .nothing
+        let workURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-convertibility-test-\(UUID().uuidString)", isDirectory: true)
+        memoryDirectoryURL = workURL.appendingPathComponent("memory", isDirectory: true)
+        userDictionaryURL = workURL.appendingPathComponent("user_dictionary", isDirectory: true)
+        systemDictionaryURL = root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary")
+        converter = KanaKanjiConverter(dictionaryURL: systemDictionaryURL, preloadDictionary: false)
+        composingText = ComposingText()
+    }
+
+    // 辞書にある漢字の語は、読みを渡さなくても推定した読みで上位に出る
+    @Test func dictionaryWordIsConvertibleWithInferredReading() {
+        let result = checkConvertibility([ConvertibilityQuery(word: "東京", reading: "")])
+        #expect(result == [ConvertibilityResult(word: "東京", reading: "とうきょう", convertible: true)])
+    }
+
+    // 辞書に無い名前は、読みを渡しても上位に出ない（登録の候補に残る）
+    @Test func unknownNameIsNotConvertible() {
+        let result = checkConvertibility([ConvertibilityQuery(word: "azooKey", reading: "あずきー")])
+        #expect(result == [ConvertibilityResult(word: "azooKey", reading: "あずきー", convertible: false)])
+    }
+
+    // 英字の語は読みを推定できない。英字のまま入力すると英字が候補に出るが、それで「変換できる」にしない
+    @Test func alphabetWordWithoutReadingIsNotConvertible() {
+        let result = checkConvertibility([ConvertibilityQuery(word: "Claude", reading: "")])
+        #expect(result == [ConvertibilityResult(word: "Claude", reading: "", convertible: false)])
+    }
+
+    // 渡した読みで調べる（読みが違えば上位に出ない）
+    @Test func givenReadingIsUsed() {
+        let result = checkConvertibility([
+            ConvertibilityQuery(word: "東京", reading: "とうきょう"),
+            ConvertibilityQuery(word: "東京", reading: "きょうと"),
+        ])
+        #expect(result.map(\.convertible) == [true, false])
+    }
+
+    // 複数の語をまとめて逆引きしても、1 語ずつ引いたときと同じ読みになる
+    @Test func batchLookupMatchesSingleLookup() {
+        let index = reconversionReadingIndex()
+        let words = ["東京", "漢字変換", "待機中", "日本語入力", "変換", "東京都庁", "京都"]
+        let all = lookupAll(words, index: index)
+        for word in words {
+            #expect(inferReadings(for: word, lookup: { _ in all[word] ?? [:] }) == inferReadings(for: word, index: index))
+        }
+    }
+
+    // 1 回の問い合わせ（16 語）の時間。IME の変換はその間待たされる
+    @Test func measureBatchTime() {
+        _ = checkConvertibility([ConvertibilityQuery(word: "東京", reading: "")])
+        let words = ["確認", "画面", "提案", "動画", "実測", "画像", "会話", "規約", "調査", "設定", "理由", "記録", "公式", "待機中", "関連", "明記"]
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            _ = checkConvertibility(words.map { ConvertibilityQuery(word: $0, reading: "") })
+        }
+        let index = reconversionReadingIndex()
+        let oneByOne = clock.measure {
+            for word in words { _ = inferReadings(for: word, index: index) }
+        }
+        print("convertibility batch of \(words.count): \(elapsed) (lookup one by one: \(oneByOne))")
+    }
+
+    // 検査は IME の入力中の文字列と直近の候補を変えない
+    @Test func checkDoesNotTouchComposition() {
+        composingText.insertAtCursorPosition("kanji", inputStyle: .roman2kana)
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        _ = get_composed_text(lengthPtr: length)
+        let before = lastCandidates.map(\.text)
+
+        let json = #"[{"word":"東京","reading":""},{"word":"azooKey","reading":"あずきー"}]"#
+        let output = json.withCString { pointer in
+            let result = check_convertibility(queries: pointer)
+            defer { free(result) }
+            return String(cString: result)
+        }
+        let decoded = try? JSONDecoder().decode([ConvertibilityResult].self, from: Data(output.utf8))
+        #expect(decoded?.map(\.convertible) == [true, false])
+        #expect(composingText.convertTarget == "かんじ")
+        #expect(lastCandidates.map(\.text) == before)
+        _ = get_composed_text(lengthPtr: length)
+        #expect(lastCandidates.map(\.text) == before)
+        clear_text()
+    }
+}
+}
+
 // Zenzai を有効にした変換。zenz.gguf が要るので、環境変数 AZOOKEY_ZENZ_GGUF にその場所を渡したときだけ走らせる
 // （例: AZOOKEY_ZENZ_GGUF=<リポジトリ>\zenz.gguf swift test --filter ZenzaiSessionTests）
 extension GlobalStateTests {

@@ -49,6 +49,7 @@ unsafe extern "C" {
     fn StartReconversion(surface: *const c_char) -> *mut c_char;
     fn GetPredictions(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
     fn RequestTypoCorrection(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
+    fn CheckConvertibility(queries: *const c_char) -> *mut c_char;
 }
 
 #[derive(serde::Deserialize)]
@@ -71,6 +72,48 @@ fn unregistered_user_dictionary_entries() -> Vec<shared::proto::UserDictionaryEn
             word: entry.word,
         })
         .collect()
+}
+
+#[derive(serde::Serialize)]
+struct RawConvertibilityQuery<'a> {
+    word: &'a str,
+    reading: &'a str,
+}
+
+#[derive(serde::Deserialize)]
+struct RawConvertibilityResult {
+    word: String,
+    reading: String,
+    convertible: bool,
+}
+
+/// 語ごとに、登録しなくても変換できるかを調べる（Swift 側とは JSON でやり取りする）
+fn check_convertibility(
+    queries: &[shared::proto::ConvertibilityQuery],
+) -> Result<Vec<shared::proto::ConvertibilityResult>, Status> {
+    let raw: Vec<_> = queries
+        .iter()
+        .map(|query| RawConvertibilityQuery {
+            word: &query.word,
+            reading: &query.reading,
+        })
+        .collect();
+    let json = serde_json::to_string(&raw).map_err(|e| Status::internal(e.to_string()))?;
+    let json = CString::new(json).map_err(|e| Status::invalid_argument(e.to_string()))?;
+    let output = unsafe {
+        let result = CheckConvertibility(json.as_ptr());
+        CStr::from_ptr(result).to_string_lossy().into_owned()
+    };
+    let results = serde_json::from_str::<Vec<RawConvertibilityResult>>(&output)
+        .map_err(|e| Status::internal(e.to_string()))?;
+    Ok(results
+        .into_iter()
+        .map(|result| shared::proto::ConvertibilityResult {
+            word: result.word,
+            reading: result.reading,
+            convertible: result.convertible,
+        })
+        .collect())
 }
 
 fn initialize(path: &str) {
@@ -393,6 +436,17 @@ impl AzookeyService for MyAzookeyService {
             shared::proto::RequestTypoCorrectionResponse { corrections },
         ))
     }
+
+    async fn check_convertibility(
+        &self,
+        request: Request<shared::proto::CheckConvertibilityRequest>,
+    ) -> Result<Response<shared::proto::CheckConvertibilityResponse>, Status> {
+        let queries = request.into_inner().queries;
+        let results = check_convertibility(&queries)?;
+        Ok(Response::new(shared::proto::CheckConvertibilityResponse {
+            results,
+        }))
+    }
 }
 
 // Swift 側の FFI 関数は @MainActor なので、tonic のハンドラを 1 本のスレッドで動かす
@@ -416,7 +470,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .build_v1()
                 .unwrap(),
         )
-        .serve_with_incoming(TonicNamedPipeServer::new("azookey_server"))
+        .serve_with_incoming(TonicNamedPipeServer::new(&shared::server_pipe_name()))
         .await?;
 
     Ok(())
