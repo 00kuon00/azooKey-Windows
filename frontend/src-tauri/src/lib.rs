@@ -180,7 +180,12 @@ fn start_suggestion_scan(
     let cancel = state.suggestion_cancel.clone();
     let ipc = state.ipc.clone();
     std::thread::spawn(move || {
-        let finished = match scan_suggestions(&app, ipc, &cancel) {
+        // 途中で panic しても「探しています」のまま固まらないよう、結果として画面へ返す
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scan_suggestions(&app, ipc, &cancel)
+        }))
+        .unwrap_or_else(|_| Err("探している途中で止まりました".to_string()));
+        let finished = match outcome {
             Ok(result) => SuggestionFinished {
                 result: Some(result),
                 error: None,

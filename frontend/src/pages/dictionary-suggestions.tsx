@@ -402,7 +402,7 @@ export const SuggestionPanel = ({
     };
     const stop = () => {
         if (state.status === "running") setState({ ...state, stopping: true });
-        invoke("stop_suggestion_scan");
+        invoke("stop_suggestion_scan").catch(() => toast("止められませんでした"));
     };
 
     const running = current.status === "running";
