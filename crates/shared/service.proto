@@ -125,6 +125,23 @@ message StartReconversionResponse {
   ComposingText composing_text = 1;
 }
 
+// ユーザー辞書の登録候補（#17）: 語が登録しなくても変換できるか（読みを入力したとき候補の上位に出るか）を調べる
+message ConvertibilityQuery {
+  string word = 1;
+  string reading = 2; // 読み（ひらがな）。空ならサーバが辞書から推定する
+}
+message ConvertibilityResult {
+  string word = 1;
+  string reading = 2; // 調べるのに使った読み。推定できなければ空
+  bool convertible = 3;
+}
+message CheckConvertibilityRequest {
+  // IME の変換と同じスレッドで調べるので、1 回に送る数は少なくする（その間の変換が待たされる）
+  repeated ConvertibilityQuery queries = 1;
+}
+message CheckConvertibilityResponse {
+  repeated ConvertibilityResult results = 1;
+}
 
 // Service definition for text editing operations.
 service AzookeyService {
@@ -141,4 +158,5 @@ service AzookeyService {
   rpc ForgetCandidate (ForgetCandidateRequest) returns (ForgetCandidateResponse);
   rpc StartReconversion (StartReconversionRequest) returns (StartReconversionResponse);
   rpc RequestTypoCorrection (RequestTypoCorrectionRequest) returns (RequestTypoCorrectionResponse);
+  rpc CheckConvertibility (CheckConvertibilityRequest) returns (CheckConvertibilityResponse);
 }
