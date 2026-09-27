@@ -47,6 +47,8 @@ unsafe extern "C" {
     fn ForgetCandidate(text: *const c_char) -> *mut c_char;
     fn GetUnregisteredUserDictionaryEntries() -> *mut c_char;
     fn StartReconversion(surface: *const c_char) -> *mut c_char;
+    fn GetPredictions(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
+    fn RequestTypoCorrection(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
 }
 
 #[derive(serde::Deserialize)]
@@ -132,12 +134,14 @@ fn clear_text() {
     }
 }
 
-fn get_composed_text() -> Vec<Suggestion> {
+/// Swift が返した候補の配列を読む（同じ文字列の候補は最初の 1 件だけ残す）。2 つ目は読み（hiragana）
+unsafe fn read_candidates(
+    list: unsafe extern "C" fn(*mut SwiftInt) -> *mut *mut FFICandidate,
+) -> Vec<(Suggestion, String)> {
     unsafe {
         let mut length: SwiftInt = 0;
-        let result = GetComposedText(&mut length);
-        let mut suggestions = Vec::with_capacity(length as usize);
-
+        let result = list(&mut length);
+        let mut candidates: Vec<(Suggestion, String)> = Vec::with_capacity(length as usize);
         for index in 0..length as usize {
             let candidate = (**result.add(index)).clone();
             let text = CStr::from_ptr(candidate.text)
@@ -146,25 +150,49 @@ fn get_composed_text() -> Vec<Suggestion> {
             let subtext = CStr::from_ptr(candidate.subtext)
                 .to_string_lossy()
                 .into_owned();
-            let corresponding_count = candidate.corresponding_count;
-
-            let suggestion = Suggestion {
-                text,
-                subtext,
-                corresponding_count,
-            };
+            let hiragana = CStr::from_ptr(candidate.hiragana)
+                .to_string_lossy()
+                .into_owned();
 
             // check if suggestions have the same text
-            if suggestions
-                .iter()
-                .any(|s: &Suggestion| s.text == suggestion.text)
-            {
+            if candidates.iter().any(|(s, _)| s.text == text) {
                 continue;
             }
-            suggestions.push(suggestion);
+            candidates.push((
+                Suggestion {
+                    text,
+                    subtext,
+                    corresponding_count: candidate.corresponding_count,
+                },
+                hiragana,
+            ));
         }
+        candidates
+    }
+}
 
-        suggestions
+fn get_composed_text() -> Vec<Suggestion> {
+    unsafe { read_candidates(GetComposedText) }
+        .into_iter()
+        .map(|(suggestion, _)| suggestion)
+        .collect()
+}
+
+/// 直近の get_composed_text の予測（get_composed_text のあとに呼ぶ）
+fn get_predictions() -> Vec<Suggestion> {
+    unsafe { read_candidates(GetPredictions) }
+        .into_iter()
+        .map(|(suggestion, _)| suggestion)
+        .collect()
+}
+
+/// 候補を変換し直し、予測と合わせて返す
+fn composing_text(hiragana: String) -> ComposingText {
+    let suggestions = get_composed_text();
+    ComposingText {
+        hiragana,
+        suggestions,
+        predictions: get_predictions(),
     }
 }
 
@@ -203,10 +231,7 @@ impl AzookeyService for MyAzookeyService {
         let composing_text = add_text(&input);
 
         Ok(Response::new(AppendTextResponse {
-            composing_text: Some(ComposingText {
-                hiragana: composing_text.text,
-                suggestions: get_composed_text().to_vec(),
-            }),
+            composing_text: Some(self::composing_text(composing_text.text)),
         }))
     }
 
@@ -217,10 +242,7 @@ impl AzookeyService for MyAzookeyService {
         let composing_text = remove_text();
 
         Ok(Response::new(RemoveTextResponse {
-            composing_text: Some(ComposingText {
-                hiragana: composing_text.text,
-                suggestions: get_composed_text().to_vec(),
-            }),
+            composing_text: Some(self::composing_text(composing_text.text)),
         }))
     }
 
@@ -232,10 +254,7 @@ impl AzookeyService for MyAzookeyService {
         let composing_text = move_cursor(offset);
 
         Ok(Response::new(MoveCursorResponse {
-            composing_text: Some(ComposingText {
-                hiragana: composing_text.text,
-                suggestions: get_composed_text().to_vec(),
-            }),
+            composing_text: Some(self::composing_text(composing_text.text)),
         }))
     }
 
@@ -255,10 +274,7 @@ impl AzookeyService for MyAzookeyService {
         let composing_text = shrink_text(offset);
 
         Ok(Response::new(ShrinkTextResponse {
-            composing_text: Some(ComposingText {
-                hiragana: composing_text.text,
-                suggestions: get_composed_text().to_vec(),
-            }),
+            composing_text: Some(self::composing_text(composing_text.text)),
         }))
     }
 
@@ -273,10 +289,7 @@ impl AzookeyService for MyAzookeyService {
         };
 
         Ok(Response::new(SetSegmentResponse {
-            composing_text: Some(ComposingText {
-                hiragana,
-                suggestions: get_composed_text().to_vec(),
-            }),
+            composing_text: Some(composing_text(hiragana)),
         }))
     }
 
@@ -338,10 +351,7 @@ impl AzookeyService for MyAzookeyService {
         };
 
         Ok(Response::new(shared::proto::ForgetCandidateResponse {
-            composing_text: Some(ComposingText {
-                hiragana,
-                suggestions: get_composed_text(),
-            }),
+            composing_text: Some(composing_text(hiragana)),
         }))
     }
 
@@ -353,18 +363,35 @@ impl AzookeyService for MyAzookeyService {
         let text = CString::new(text).map_err(|e| Status::invalid_argument(e.to_string()))?;
         let hiragana = start_reconversion(&text);
         // 読みが無ければ変換しない（空の入力で変換すると候補の取り出しが失敗する）
-        let suggestions = if hiragana.is_empty() {
-            vec![]
+        let composing_text = if hiragana.is_empty() {
+            ComposingText {
+                hiragana,
+                ..Default::default()
+            }
         } else {
-            get_composed_text()
+            composing_text(hiragana)
         };
 
         Ok(Response::new(shared::proto::StartReconversionResponse {
-            composing_text: Some(ComposingText {
-                hiragana,
-                suggestions,
-            }),
+            composing_text: Some(composing_text),
         }))
+    }
+
+    async fn request_typo_correction(
+        &self,
+        _: Request<shared::proto::RequestTypoCorrectionRequest>,
+    ) -> Result<Response<shared::proto::RequestTypoCorrectionResponse>, Status> {
+        let corrections = unsafe { read_candidates(RequestTypoCorrection) }
+            .into_iter()
+            .map(|(suggestion, hiragana)| shared::proto::TypoCorrection {
+                text: suggestion.text,
+                hiragana,
+                corresponding_count: suggestion.corresponding_count,
+            })
+            .collect();
+        Ok(Response::new(
+            shared::proto::RequestTypoCorrectionResponse { corrections },
+        ))
     }
 }
 

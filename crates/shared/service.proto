@@ -12,6 +12,9 @@ message Suggestion {
 message ComposingText {
   string hiragana = 1; // The main text content.
   repeated Suggestion suggestions = 2; // List of suggestions for the text.
+  // 入力中の読みの続きを補った予測（「おはよ」→「おはよう」）。suggestions とは別に並べ、ライブ変換の 1 位には使わない。
+  // 確定すると入力中の文字列をすべて使う（subtext は空、corresponding_count は入力全体）
+  repeated Suggestion predictions = 3;
 }
 
 // Request message for AppendText.
@@ -106,6 +109,17 @@ message ForgetCandidateResponse {
 message StartReconversionRequest {
   string text = 1; // 再変換する文字列（選択範囲）
 }
+// 打ち間違いを直した「もしかして」を求める（Zenzai が有効なときだけ返る）
+message RequestTypoCorrectionRequest {}
+message TypoCorrection {
+  string text = 1;     // 直した読みを変換した 1 位
+  string hiragana = 2; // 直した読み
+  int32 corresponding_count = 3; // 入力全体の文字数（確定すると入力中の文字列をすべて使う）
+}
+message RequestTypoCorrectionResponse {
+  repeated TypoCorrection corrections = 1;
+}
+
 message StartReconversionResponse {
   // hiragana は推定した読み。推定できなければ hiragana は空で候補も無い
   ComposingText composing_text = 1;
@@ -126,4 +140,5 @@ service AzookeyService {
   rpc ResetLearning (ResetLearningRequest) returns (ResetLearningResponse);
   rpc ForgetCandidate (ForgetCandidateRequest) returns (ForgetCandidateResponse);
   rpc StartReconversion (StartReconversionRequest) returns (StartReconversionResponse);
+  rpc RequestTypoCorrection (RequestTypoCorrectionRequest) returns (RequestTypoCorrectionResponse);
 }

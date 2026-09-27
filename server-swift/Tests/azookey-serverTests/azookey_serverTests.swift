@@ -1,7 +1,9 @@
 import Testing
 import Foundation
 import KanaKanjiConverterModule
+import SwiftUtils
 @testable import azookey_server
+import ffi
 
 @Test func example() async throws {
     // Write your test here and use APIs like `#expect(...)` to check expected conditions.
@@ -187,6 +189,122 @@ extension GlobalStateTests {
     }
 }
 
+}
+
+extension GlobalStateTests {
+@MainActor @Suite struct PredictionTests {
+    let memoryURL: URL
+    let dictionaryURL: URL
+
+    init() {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        execURL = root.appendingPathComponent("azooKey_emoji_dictionary_storage")
+        config["enable"] = false
+        config["profile"] = ""
+        config["context"] = ""
+        memoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-prediction-test-\(UUID().uuidString)", isDirectory: true)
+        memoryDirectoryURL = memoryURL
+        userDictionaryURL = memoryURL.appendingPathComponent("user_dictionary", isDirectory: true)
+        learningType = .nothing
+        dictionaryURL = root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary")
+        converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
+        clear_text()
+    }
+
+    func type(_ roman: String) {
+        for character in roman {
+            let cursor = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+            free(append_text(input: String(character), cursorPtr: cursor))
+            cursor.deallocate()
+        }
+    }
+
+    func read(_ list: (UnsafeMutablePointer<Int>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?>)
+        -> [(text: String, subtext: String, hiragana: String, count: Int32)] {
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        let result = list(length)
+        return (0..<length.pointee).map { i in
+            let candidate = result[i]!.pointee
+            return (String(cString: candidate.text), String(cString: candidate.subtext),
+                    String(cString: candidate.hiragana), candidate.correspondingCount)
+        }
+    }
+
+    // 予測は語を切らずにそのまま返り、確定すると入力中の文字列をすべて使う。通常の候補と同じ語・読みそのままは出さない
+    @Test func predictionsAreWholeWords() {
+        type("ohayo")
+        let candidates = read { get_composed_text(lengthPtr: $0) }.map(\.text)
+        let predictions = read { get_predictions(lengthPtr: $0) }
+        #expect(!predictions.isEmpty)
+        #expect(predictions.contains { $0.text.hasPrefix("おはよ") && $0.text.count > 3 })
+        for prediction in predictions {
+            #expect(prediction.subtext == "")
+            #expect(prediction.count == Int32("ohayo".count))
+            #expect(!candidates.contains(prediction.text))
+            #expect(prediction.text != "おはよ")
+        }
+        // 確定（ShrinkText に入力全体の数）で読みが残らない
+        free(shrink_text(offset: predictions[0].count))
+        #expect(composingText.convertTarget == "")
+        clear_text()
+    }
+
+    // 予測を別に受け取っても、ライブ変換の 1 位（1 文字ごと）は予測を出さないときと同じ（#1 の 10 入力）
+    @Test func liveConversionTopIsUnchanged() {
+        let inputs = ["nihongo", "kyouhaiitenkidesune", "watashinonamaehanakanodesu", "toukyoutokkyokyokakyoku",
+                      "konnnichiha", "nihonn", "kanjihenkan", "2025nen10gatu", "a", "shinkansennnonoriba"]
+        let reference = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
+        var options = getOptions()
+        options.requireJapanesePrediction = .disabled
+        for input in inputs {
+            var typed = ComposingText()
+            for character in input {
+                typed.insertAtCursorPosition(String(character), inputStyle: .roman2kana)
+                type(String(character))
+                let expected = reference.requestCandidates(typed, options: options).mainResults.first
+                    .map { constructCandidateString(candidate: $0, hiragana: typed.convertTarget) }
+                let actual = read { get_composed_text(lengthPtr: $0) }.first?.text
+                #expect(actual == expected, "\(input) の \(typed.convertTarget)")
+            }
+            clear_text()
+            reference.stopComposition()
+        }
+    }
+
+    // 予測を確定すると学習される（CommitCandidate が予測を見つけられる）
+    @Test func committedPredictionIsLearned() {
+        learningType = .inputAndOutput
+        type("ohayo")
+        _ = read { get_composed_text(lengthPtr: $0) }
+        let prediction = read { get_predictions(lengthPtr: $0) }.first!.text
+        prediction.withCString { commit_candidate(text: $0) }
+        clear_text()
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: memoryURL.path(percentEncoded: false))) ?? []
+        #expect(files.contains { $0.hasPrefix("memory.louds") })
+    }
+
+    // 文節の区切りを動かしている間は予測を出さない
+    @Test func noPredictionWhileSegmenting() {
+        type("kyouhaiitenki")
+        free(set_segment_surface_count(count: 4))
+        _ = read { get_composed_text(lengthPtr: $0) }
+        #expect(read { get_predictions(lengthPtr: $0) }.isEmpty)
+        clear_text()
+    }
+
+    // Zenzai が無効なら「もしかして」は出さない
+    @Test func noTypoCorrectionWithoutZenzai() {
+        type("arigatoi")
+        _ = read { get_composed_text(lengthPtr: $0) }
+        #expect(read { request_typo_correction(lengthPtr: $0) }.isEmpty)
+        clear_text()
+    }
+}
 }
 
 extension GlobalStateTests {
@@ -714,6 +832,189 @@ struct ZenzaiSessionTests {
         print("ZENZAI-BENCH [gpu layers \(layers)] load and first input: \(String(format: "%.1f ms", load * 1000))")
         print("ZENZAI-BENCH [gpu layers \(layers)] every keystroke: \(summary(all))")
         print("ZENZAI-BENCH [gpu layers \(layers)] whole sentence: \(summary(lasts))")
+    }
+
+    // 打ち間違い（隣のキー）を直した読みが「もしかして」の 1 つ目に出る。語は直した読みの変換で、確定すると入力をすべて使う。
+    // そのあと続けて入力しても、変換器を新しく作ったときと同じ候補が出る（直した読みの変換に引きずられない）
+    @Test func typoCorrectionSuggestsCorrectedReading() {
+        _ = type("arigatoi")
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        let list = request_typo_correction(lengthPtr: length)
+        let corrections = (0..<length.pointee).map { i in
+            (text: String(cString: list[i]!.pointee.text), subtext: String(cString: list[i]!.pointee.subtext),
+             hiragana: String(cString: list[i]!.pointee.hiragana), count: list[i]!.pointee.correspondingCount)
+        }
+        #expect(corrections.first?.hiragana == "ありがとう")
+        #expect(corrections.first?.subtext == "")
+        #expect(corrections.first?.count == Int32("arigatoi".count))
+        #expect(corrections.count <= maxTypoCorrections)
+
+        let carried = type("u").candidates
+        clear_text()
+        converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
+        let fresh = type("arigatoiu").candidates
+        clear_text()
+        #expect(carried.first == fresh.first)
+    }
+
+    // 打ち間違い補正の結果の並びと重み（prominence）。打った読みが何位か・正しく打った入力で何が出るかを見る。合否は付けない
+    @Test func inspectTypoCorrectionScores() {
+        commitFirstAndClear(type("junbi").candidates)
+        let typos = ["arigatoi", "yorosikuonegaisinasu", "sigoyo", "kinoi", "otukaresaa",
+                     "kyouhaitenkidesune", "watsiha", "arigatougozaimsau", "sumimasne", "ohayougozaimaus"]
+        let correct = ["nihongo", "kyouhaiitenkidesune", "watashinonamaehanakanodesu", "toukyoutokkyokyokakyoku",
+                       "konnnichiha", "nihonn", "kanjihenkan", "2025nen10gatu", "a", "shinkansennnonoriba"]
+        for (label, inputs) in [("typo", typos), ("correct", correct)] {
+            for typed in inputs {
+                _ = type(typed)
+                let result = converter.experimentalRequestTypoCorrection(
+                    leftSideContext: "", composingText: composingText, options: getOptions(), inputStyle: .roman2kana,
+                    config: typoCorrectionConfig
+                )
+                let reading = composingText.convertTarget
+                let rows = result.map { String(format: "%@(%.2f)", $0.convertedText.toHiragana(), $0.prominence) }
+                let typedRank = result.firstIndex { $0.convertedText.toHiragana() == reading }.map { "\($0 + 1)" } ?? "-"
+                print("ZENZAI-BENCH inspect [\(label)] \(typed) typed=\(typedRank): \(rows.joined(separator: " "))")
+                clear_text()
+            }
+        }
+    }
+
+    // 正しく打った入力（#1 の 10 入力）には「もしかして」を出さない
+    @Test func noTypoCorrectionForCorrectInput() {
+        for typed in ["nihongo", "kyouhaiitenkidesune", "watashinonamaehanakanodesu", "toukyoutokkyokyokakyoku",
+                      "konnnichiha", "nihonn", "kanjihenkan", "2025nen10gatu", "a", "shinkansennnonoriba"] {
+            _ = type(typed)
+            let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+            let list = request_typo_correction(lengthPtr: length)
+            let shown = (0..<length.pointee).map { String(cString: list[$0]!.pointee.hiragana) }
+            length.deallocate()
+            #expect(shown.isEmpty, "\(typed): \(shown)")
+            clear_text()
+        }
+    }
+
+    // Space を押したときにかかる時間（「もしかして」を求めて、直した読みを変換するところまで）。合否は付けない
+    @Test func measureRequestTypoCorrection() {
+        commitFirstAndClear(type("junbi").candidates)
+        var times: [Double] = []
+        for typed in ["arigatoi", "yorosikuonegaisinasu", "sigoyo", "kinoi", "otukaresaa",
+                      "kyouhaitenkidesune", "watsiha", "arigatougozaimsau", "sumimasne", "ohayougozaimaus"] {
+            _ = type(typed)
+            let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+            let start = Date()
+            let list = request_typo_correction(lengthPtr: length)
+            times.append(-start.timeIntervalSinceNow)
+            let shown = (0..<length.pointee).map { "\(String(cString: list[$0]!.pointee.text))（\(String(cString: list[$0]!.pointee.hiragana))）" }
+            print("ZENZAI-BENCH RequestTypoCorrection \(typed): \(shown.joined(separator: "・"))")
+            length.deallocate()
+            clear_text()
+        }
+        let sorted = times.sorted()
+        let layers = ProcessInfo.processInfo.environment["AZOOKEY_GPU_LAYERS"] ?? "0"
+        print(String(format: "ZENZAI-BENCH [gpu layers %@] RequestTypoCorrection: median %.1f ms / max %.1f ms (n=%d)",
+                     layers, sorted[sorted.count / 2] * 1000, sorted.last! * 1000, sorted.count))
+    }
+
+    // 打ち間違い補正（experimentalRequestTypoCorrection）1 回の時間と、正しい読みが何位に出るか（合否は付けない。結果は出力に書く）。
+    // 打ち間違いは 隣のキー 4・文字の抜け 3・入れ替わり 3。探索の広さ（beamSize・topK）を変えて比べる
+    @Test func measureTypoCorrection() {
+        let cases: [(typed: String, expected: String, kind: String)] = [
+            ("arigatoi", "ありがとう", "隣"),
+            ("yorosikuonegaisinasu", "よろしくおねがいします", "隣"),
+            ("sigoyo", "しごと", "隣"),
+            ("kinoi", "きのう", "隣"),
+            ("otukaresaa", "おつかれさま", "抜け"),
+            ("kyouhaitenkidesune", "きょうはいいてんきですね", "抜け"),
+            ("watsiha", "わたしは", "抜け"),
+            ("arigatougozaimsau", "ありがとうございます", "入れ替わり"),
+            ("sumimasne", "すみません", "入れ替わり"),
+            ("ohayougozaimaus", "おはようございます", "入れ替わり"),
+        ]
+        commitFirstAndClear(type("junbi").candidates)
+        func summary(_ values: [Double]) -> String {
+            let sorted = values.sorted()
+            return String(format: "median %.1f ms / max %.1f ms (n=%d)", sorted[sorted.count / 2] * 1000, sorted.last! * 1000, sorted.count)
+        }
+        let layers = ProcessInfo.processInfo.environment["AZOOKEY_GPU_LAYERS"] ?? "0"
+        for (beam, topK) in [(32, 64), (16, 32), (8, 16), (4, 8)] {
+            let config = ExperimentalTypoCorrectionConfig(beamSize: beam, topK: topK)
+            var times: [Double] = []
+            var top1 = 0
+            var top2 = 0
+            for (typed, expected, kind) in cases {
+                let live = type(typed).candidates.first ?? ""
+                let start = Date()
+                let result = converter.experimentalRequestTypoCorrection(
+                    leftSideContext: "", composingText: composingText, options: getOptions(), inputStyle: .roman2kana, config: config
+                )
+                times.append(-start.timeIntervalSinceNow)
+                // エンジンは読みをカタカナで返す
+                let readings = result.map { $0.convertedText.toHiragana() }
+                let index = readings.firstIndex(of: expected)
+                if index == 0 { top1 += 1 }
+                if let index, index < 2 { top2 += 1 }
+                let rank = index.map { "\($0 + 1) 位" } ?? "圏外"
+                print("ZENZAI-BENCH typo [beam \(beam)/topK \(topK)] [\(kind)] \(typed)（ライブ変換「\(live)」）→ \(expected): \(rank) / \(readings.prefix(5).joined(separator: "・"))")
+                clear_text()
+            }
+            print("ZENZAI-BENCH [gpu layers \(layers)] typo beam \(beam)/topK \(topK): \(summary(times)), 1 位 \(top1)/\(cases.count), 2 位以内 \(top2)/\(cases.count)")
+        }
+    }
+
+    // 予測を別に受け取る（.manualMix）と、ライブ変換の 1 位と 1 文字ごとの時間がどう変わるか（#1 の 10 入力）。
+    // 合否は付けない。結果は出力に書く
+    @Test func measurePredictionMode() {
+        let inputs = ["nihongo", "kyouhaiitenkidesune", "watashinonamaehanakanodesu", "toukyoutokkyokyokakyoku",
+                      "konnnichiha", "nihonn", "kanjihenkan", "2025nen10gatu", "a", "shinkansennnonoriba"]
+        func run(_ mode: ConvertRequestOptions.PredictionMode) -> (firsts: [[String]], times: [Double], predictions: [String: [String]]) {
+            converter = KanaKanjiConverter(dictionaryURL: dictionaryURL, preloadDictionary: false)
+            clear_text()
+            var options = getOptions()
+            options.requireJapanesePrediction = mode
+            _ = converter.requestCandidates(composingText, options: options)
+            var firsts: [[String]] = []
+            var times: [Double] = []
+            var predictions: [String: [String]] = [:]
+            for input in inputs + ["ohayo", "arigat", "otukaresa"] {
+                var perKey: [String] = []
+                for character in input {
+                    composingText.insertAtCursorPosition(String(character), inputStyle: .roman2kana)
+                    let start = Date()
+                    let result = converter.requestCandidates(composingText, options: options)
+                    times.append(-start.timeIntervalSinceNow)
+                    perKey.append(result.mainResults.first.map { constructCandidateString(candidate: $0, hiragana: composingText.convertTarget) } ?? "")
+                    predictions[input] = result.predictionResults.map(\.text)
+                }
+                firsts.append(perKey)
+                clear_text()
+            }
+            return (firsts, times, predictions)
+        }
+        let disabled = run(.disabled)
+        let manual = run(.manualMix)
+        var sameFinal = 0
+        var sameKeys = 0
+        var keys = 0
+        for i in 0..<inputs.count {
+            if disabled.firsts[i].last == manual.firsts[i].last { sameFinal += 1 }
+            for (a, b) in zip(disabled.firsts[i], manual.firsts[i]) {
+                keys += 1
+                if a == b { sameKeys += 1 } else { print("ZENZAI-BENCH prediction diff \(inputs[i]): \(a) / \(b)") }
+            }
+        }
+        func summary(_ values: [Double]) -> String {
+            let sorted = values.sorted()
+            return String(format: "median %.1f ms / max %.1f ms (n=%d)", sorted[sorted.count / 2] * 1000, sorted.last! * 1000, sorted.count)
+        }
+        let layers = ProcessInfo.processInfo.environment["AZOOKEY_GPU_LAYERS"] ?? "0"
+        print("ZENZAI-BENCH prediction: live conversion top same \(sameFinal)/\(inputs.count) inputs, \(sameKeys)/\(keys) keystrokes")
+        print("ZENZAI-BENCH [gpu layers \(layers)] .disabled every keystroke: \(summary(disabled.times))")
+        print("ZENZAI-BENCH [gpu layers \(layers)] .manualMix every keystroke: \(summary(manual.times))")
+        for input in ["ohayo", "arigat", "otukaresa", "kanjihenkan", "konnnichiha"] {
+            print("ZENZAI-BENCH prediction \(input): \(manual.predictions[input] ?? [])")
+        }
     }
 }
 }

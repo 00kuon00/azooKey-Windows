@@ -1,4 +1,5 @@
 import KanaKanjiConverterModule
+import SwiftUtils
 import Foundation
 import ffi
 
@@ -19,6 +20,10 @@ import ffi
 @MainActor var memoryDirectoryURL: URL = defaultMemoryDirectoryURL()
 // 直近の GetComposedText で返した候補。確定の知らせ（CommitCandidate）を受けたとき、表示文字列から Candidate を引く
 @MainActor var lastCandidates: [(text: String, candidate: Candidate)] = []
+// 直近の GetComposedText で変換器が返した予測（入力中の読みの続きを補った語）。GetPredictions で返し、確定の知らせでも引く
+@MainActor var lastPredictions: [(text: String, candidate: Candidate)] = []
+// 直近の RequestTypoCorrection で返した「もしかして」。text は直した読みを変換した 1 位、candidate はその変換の候補
+@MainActor var lastTypoCorrections: [(text: String, hiragana: String, candidate: Candidate)] = []
 // Shift+←→ で決めた最初の文節の読みの長さ（convertTarget 上の文字数）。nil のときは区切りを変換器に任せる。
 // 入力・削除・確定・消去で nil に戻す
 @MainActor var segmentSurfaceCount: Int?
@@ -89,9 +94,9 @@ func gpuLayerCount(backend: String) -> Int32 {
 
 @MainActor func getOptions(context: String = "") -> ConvertRequestOptions {
     return ConvertRequestOptions(
-        // 予測候補は constructCandidateString で入力の長さに切られ、ひらがなの重複としてしか出ない。
-        // 新しいエンジンは .autoMix だとそれを 1 位に置くため、旧版と同じ 1 位を保つよう生成しない
-        requireJapanesePrediction: .disabled,
+        // 予測は候補（mainResults）に混ぜず predictionResults に分けて受け取る（GetPredictions）。
+        // .autoMix は予測を 1 位に置き、ライブ変換の表示が変わるので使わない
+        requireJapanesePrediction: .manualMix,
         requireEnglishPrediction: .disabled,
         keyboardLanguage: .ja_JP,
         learningType: learningType,
@@ -251,6 +256,8 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
 @MainActor public func clear_text() {
     composingText = ComposingText()
     lastCandidates = []
+    lastPredictions = []
+    lastTypoCorrections = []
     segmentSurfaceCount = nil
     // 入力の区切り。前の入力で確定した語を、次の入力の学習の「直前の語」に持ち越さない
     // （前回の変換結果も捨てる。Zenzai の llama context は作り直さない版のエンジンを使っている・#13）
@@ -335,8 +342,12 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
 
 @_silgen_name("GetComposedText")
 @MainActor public func get_composed_text(lengthPtr: UnsafeMutablePointer<Int>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    // 読みが変わったら、前の読みの「もしかして」は使わない
+    lastTypoCorrections = []
     if let segmentSurfaceCount {
         lastCandidates = []
+        // 文節の区切りを動かしている間は、読み全体の続きを補う予測は出さない
+        lastPredictions = []
         let result = segmentCandidates(surfaceCount: segmentSurfaceCount)
         lengthPtr.pointee = result.count
         return to_list_pointer(result)
@@ -347,6 +358,7 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
     let converted = converter.requestCandidates(composingText, options: options)
     var result: [FFICandidate] = []
     lastCandidates = []
+    lastPredictions = predictions(from: converted, hiragana: hiragana)
 
     for i in 0..<converted.mainResults.count {
         let candidate = converted.mainResults[i]
@@ -366,6 +378,106 @@ func to_list_pointer(_ list: [FFICandidate]) -> UnsafeMutablePointer<UnsafeMutab
 
     return to_list_pointer(result)
 }
+
+/// 予測のうち、読みの続きを補ったものだけを返す（通常の候補と同じ語・読みそのままは出さない）。
+/// 予測は語を切らずにそのまま出す（constructCandidateString を通すと打った読みの長さで切られる）
+@MainActor func predictions(from converted: ConversionResult, hiragana: String) -> [(text: String, candidate: Candidate)] {
+    var seen = Set(converted.mainResults.map { constructCandidateString(candidate: $0, hiragana: hiragana) })
+    seen.insert(hiragana)
+    var result: [(text: String, candidate: Candidate)] = []
+    for candidate in converted.predictionResults where !seen.contains(candidate.text) {
+        seen.insert(candidate.text)
+        result.append((candidate.text, candidate))
+    }
+    return result
+}
+
+/// 直近の GetComposedText の予測。確定すると入力中の文字列をすべて使うので、subtext は空、correspondingCount は入力全体
+@_silgen_name("GetPredictions")
+@MainActor public func get_predictions(lengthPtr: UnsafeMutablePointer<Int>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    let hiragana = composingText.convertTarget
+    let count = Int32(composingText.input.count)
+    let result = lastPredictions.map {
+        FFICandidate(text: strdup($0.text), subtext: strdup(""), hiragana: strdup(hiragana), correspondingCount: count)
+    }
+    lengthPtr.pointee = result.count
+    return to_list_pointer(result)
+}
+
+/// 打ち間違いを直した「もしかして」を返す（変換エンジンの experimentalRequestTypoCorrection）。
+/// 言語モデルに zenz を使うので、Zenzai が無効なら何もしない（エンジンも空を返す）。
+/// 直した読みを変換した 1 位を text、直した読みを hiragana に入れる。確定すると入力中の文字列をすべて使う。
+/// 学習は直した読みの変換の候補で行う（打ち間違えた読みでは覚えない）
+@_silgen_name("RequestTypoCorrection")
+@MainActor public func request_typo_correction(lengthPtr: UnsafeMutablePointer<Int>) -> UnsafeMutablePointer<UnsafeMutablePointer<FFICandidate>?> {
+    lastTypoCorrections = []
+    let typed = composingText
+    let options = getOptions(context: (config["context"] as? String) ?? "")
+    // getOptions と同じく設定の enable で Zenzai の有無を見る（zenzaiMode.enabled はエンジンの外から見えない）
+    guard config["enable"] as? Bool == true, segmentSurfaceCount == nil, !typed.input.isEmpty else {
+        lengthPtr.pointee = 0
+        return to_list_pointer([])
+    }
+    let corrections = converter.experimentalRequestTypoCorrection(
+        leftSideContext: (config["context"] as? String) ?? "",
+        composingText: typed,
+        options: options,
+        inputStyle: .roman2kana,
+        config: typoCorrectionConfig
+    )
+    let shown = Set(lastCandidates.map(\.text) + lastPredictions.map(\.text))
+    var convertedCorrection = false
+    // 直した読みの変換で変換器の「前回の入力」が変わるので、打った読みで変換し直して戻す。
+    // 戻さないと次の 1 文字の変換が直した読みに引きずられる（「arigatoi」の補正のあと「u」で「ありがと謂う」になった）
+    defer {
+        if convertedCorrection {
+            _ = converter.requestCandidates(typed, options: options)
+        }
+    }
+    for correction in corrections {
+        guard lastTypoCorrections.count < maxTypoCorrections else { break }
+        // エンジンは直した読みをカタカナで返す
+        let hiragana = correction.convertedText.toHiragana()
+        // 打った読みより下は出さない（正しく打った入力では、打った読みが 1 位に来る）
+        if hiragana == typed.convertTarget { break }
+        guard isLikelyTypoCorrection(correction, hiragana: hiragana, typed: typed.convertTarget),
+              !lastTypoCorrections.contains(where: { $0.hiragana == hiragana }) else { continue }
+        var corrected = ComposingText()
+        corrected.insertAtCursorPosition(correction.correctedInput, inputStyle: .roman2kana)
+        convertedCorrection = true
+        guard let best = converter.requestCandidates(corrected, options: options).mainResults.first else { continue }
+        let text = constructCandidateString(candidate: best, hiragana: corrected.convertTarget)
+        // 通常の候補・予測に同じ語があるなら、そちらを選べばよい
+        guard !shown.contains(text) else { continue }
+        lastTypoCorrections.append((text, hiragana, best))
+    }
+    let count = Int32(typed.input.count)
+    let result = lastTypoCorrections.map {
+        FFICandidate(text: strdup($0.text), subtext: strdup(""), hiragana: strdup($0.hiragana), correspondingCount: count)
+    }
+    lengthPtr.pointee = result.count
+    return to_list_pointer(result)
+}
+
+/// 「もしかして」を出す数の上限
+let maxTypoCorrections = 2
+
+/// 「もしかして」に出してよい補正か。
+/// - 1 位との相対的な重み（prominence）が小さいものは、打ち間違い 10 件でどれも意味の通らない読みだった（「このい」0.08 など）
+/// - 数字を変える補正は出さない（正しく打った「2025nen10gatu」に「2015ねん10がつ」が出た）
+/// - ローマ字が残る読み（「によmn」など）は出さない
+func isLikelyTypoCorrection(_ correction: ZenzaiTypoCandidate, hiragana: String, typed: String) -> Bool {
+    let digits = { (text: String) in text.filter(\.isASCII).filter(\.isNumber) }
+    return correction.prominence >= minTypoProminence
+        && digits(hiragana) == digits(typed)
+        && !hiragana.contains(where: { $0.isASCII && $0.isLetter })
+}
+
+/// 「もしかして」に出す補正の重み（prominence）の下限
+let minTypoProminence: Float = 0.1
+/// 打ち間違い補正の探索の広さ。エンジンの既定（beamSize 32・topK 64）は Vulkan・GPU 全層で 1 回 682 ms（中央値）かかる。
+/// 4・8 に狭めると 150 ms で、打ち間違い 10 件で正しい読みが 1 位に来る数は同じ（6/10）だった（measureTypoCorrection）
+let typoCorrectionConfig = ExperimentalTypoCorrectionConfig(beamSize: 4, topK: 8)
 
 @_silgen_name("ShrinkText")
 @MainActor public func shrink_text(
@@ -412,7 +524,9 @@ func shouldLearn(_ text: String) -> Bool {
     guard learningType == .inputAndOutput, shouldLearn(text) else {
         return
     }
-    guard let candidate = lastCandidates.first(where: { $0.text == text })?.candidate else {
+    guard let candidate = lastCandidates.first(where: { $0.text == text })?.candidate
+            ?? lastPredictions.first(where: { $0.text == text })?.candidate
+            ?? lastTypoCorrections.first(where: { $0.text == text })?.candidate else {
         print("CommitCandidate: candidate not found: \(text)")
         return
     }
