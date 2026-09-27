@@ -1,3 +1,4 @@
+pub(super) mod assist;
 pub(super) mod client_action;
 pub(super) mod composition;
 pub(super) mod full_width;

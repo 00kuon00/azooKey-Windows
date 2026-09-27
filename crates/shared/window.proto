@@ -15,14 +15,36 @@ message SetPositionRequest {
   WindowPosition position = 1; // 設定するウィンドウの位置
 }
 
+// 打ち間違いを直した「もしかして」（候補ウィンドウの #typo-row に出す）
+message TypoCandidate {
+  string text = 1;     // 直した読みを変換した 1 位
+  string hiragana = 2; // 直した読み
+}
+
 // 変換候補を送るメッセージ
 message SetCandidateRequest {
   repeated string candidates = 1;
+  // 打った読み（#reading に出す）。空なら読みの行を出さない
+  string hiragana = 2;
+  // Shift+←→ で区切った最初の文節の読みの文字数。0 なら区切っていない
+  int32 segment_length = 3;
+  // 入力中の読みの続きを補った予測（#prediction-row）
+  repeated string predictions = 4;
+  // 打ち間違いを直した「もしかして」（#typo-row）
+  repeated TypoCandidate typo_corrections = 5;
+}
+
+// どこの候補を選んでいるか
+enum SelectionKind {
+  CANDIDATE = 0;  // 変換候補の一覧（#candidate-list）
+  PREDICTION = 1; // 予測（#prediction-row）
+  TYPO = 2;       // もしかして（#typo-row）
 }
 
 // 変換候補を選択するメッセージ
 message SetSelectionRequest {
   int32 index = 1;
+  SelectionKind kind = 2;
 }
 
 message SetInputModeRequest {

@@ -11,6 +11,8 @@ pub enum UserAction {
     Enter,
     Space,
     Tab,
+    // Shift+Tab: 帯（予測・もしかして）を逆順に選ぶ
+    BackTab,
     Escape,
     Unknown,
     Navigation(Navigation),
@@ -47,11 +49,12 @@ impl TryFrom<usize> for UserAction {
     type Error = anyhow::Error;
     fn try_from(key_code: usize) -> Result<UserAction> {
         let action = match key_code {
-            0x08 => UserAction::Backspace, // VK_BACK
-            0x09 => UserAction::Tab,       // VK_TAB
-            0x0D => UserAction::Enter,     // VK_RETURN
-            0x20 => UserAction::Space,     // VK_SPACE
-            0x1B => UserAction::Escape,    // VK_ESCAPE
+            0x08 => UserAction::Backspace,                        // VK_BACK
+            0x09 if VK_SHIFT.is_pressed() => UserAction::BackTab, // Shift+VK_TAB
+            0x09 => UserAction::Tab,                              // VK_TAB
+            0x0D => UserAction::Enter,                            // VK_RETURN
+            0x20 => UserAction::Space,                            // VK_SPACE
+            0x1B => UserAction::Escape,                           // VK_ESCAPE
 
             0x2E if VK_CONTROL.is_pressed() => UserAction::Forget, // Ctrl + VK_DELETE
             0x25 if VK_SHIFT.is_pressed() => UserAction::ShrinkSegment, // Shift+VK_LEFT

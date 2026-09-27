@@ -52,6 +52,7 @@ pub fn reconversion_composition(original: &str, candidates: Candidates) -> Optio
         reconversion_original: Some(original.to_string()),
         state: CompositionState::Previewing,
         tip_composition: None,
+        ..Default::default()
     })
 }
 
@@ -86,8 +87,11 @@ impl TextServiceFactory {
         self.set_text(&composition.preview, &composition.suffix)?;
         self.update_pos()?;
         ipc_service.show_window()?;
-        ipc_service.set_candidates(composition.candidates.texts.clone())?;
-        ipc_service.set_selection(composition.selection_index)?;
+        ipc_service.set_candidates(&composition.candidates, 0)?;
+        ipc_service.set_selection(
+            shared::proto::SelectionKind::Candidate,
+            composition.selection_index,
+        )?;
 
         Ok(Some(composition))
     }
@@ -106,6 +110,7 @@ mod tests {
                 .iter()
                 .map(|_| hiragana.chars().count() as i32)
                 .collect(),
+            ..Default::default()
         }
     }
 
