@@ -286,6 +286,17 @@ async fn main() -> anyhow::Result<()> {
                                 .to_logical::<f64>(scale)
                                 .height;
                             candidate_window.set_inner_size(LogicalSize::new(width, height));
+                            // 幅だけ広がったときも、画面の右端からはみ出さないよう位置を取り直す
+                            if let Some((top, left, bottom, right)) = last_position {
+                                let (x, y) = get_candidate_window_position(
+                                    top,
+                                    left,
+                                    bottom,
+                                    right,
+                                    &candidate_window,
+                                );
+                                candidate_window.set_outer_position(PhysicalPosition::new(x, y));
+                            }
 
                             let candidates = serde_json::to_string(&view)
                                 .context("Failed to serialize candidates")

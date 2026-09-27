@@ -66,6 +66,11 @@ impl Composition {
     pub fn has_assist(&self) -> bool {
         !self.candidates.predictions.is_empty() || !self.candidates.typos.is_empty()
     }
+
+    /// この読みで「もしかして」をまだ求めていないか。再変換は推定した読みなので求めない
+    pub fn should_request_typo_correction(&self) -> bool {
+        !self.candidates.typos_requested && self.reconversion_original.is_none()
+    }
 }
 
 /// 帯で選んでいるものの文字列と、確定したときに使う入力の文字数
@@ -307,7 +312,8 @@ impl TextServiceFactory {
                     vec![ClientAction::ShrinkText(number.to_string())],
                 ),
                 UserAction::Backspace => {
-                    if composition.preview.chars().count() == 1 {
+                    // 表示中の語（帯の予測は読みより長い）ではなく、読みの長さで最後の 1 文字かを見る
+                    if composition.raw_hiragana.chars().count() <= 1 {
                         (
                             CompositionState::None,
                             vec![ClientAction::RemoveText, ClientAction::EndComposition],
@@ -374,6 +380,14 @@ impl TextServiceFactory {
                         action,
                         UserAction::Tab
                     ))],
+                ),
+                // Tab で帯を選んでから Space を押したときも、この読みでまだ求めていなければ「もしかして」を求める
+                UserAction::Space if composition.should_request_typo_correction() => (
+                    CompositionState::Previewing,
+                    vec![
+                        ClientAction::SetSelection(SetSelectionType::Down),
+                        ClientAction::RequestTypoCorrection,
+                    ],
                 ),
                 UserAction::Space | UserAction::Tab => (
                     CompositionState::Previewing,
@@ -730,7 +744,6 @@ impl TextServiceFactory {
                 }
                 ClientAction::SetTextWithType(set_type) => {
                     converted_by_function_key = true;
-                    assist = AssistSelection::None;
                     let text = match set_type {
                         SetTextType::Hiragana => raw_hiragana.clone(),
                         SetTextType::Katakana => to_katakana(&raw_hiragana),
@@ -740,6 +753,12 @@ impl TextServiceFactory {
                     };
 
                     self.set_text(&text, "")?;
+                    // 帯を選んでいたら、確定の範囲（入力全体）は変わらないので、表示中の文字列だけ合わせて帯の選択を外す
+                    if assist != AssistSelection::None {
+                        assist = AssistSelection::None;
+                        preview = text.clone();
+                        ipc_service.set_selection(SelectionKind::Candidate, selection_index)?;
+                    }
                 }
                 ClientAction::StartReconversion(range) => {
                     let Some(reconverted) =
@@ -761,6 +780,7 @@ impl TextServiceFactory {
                     transition = reconverted.state;
                 }
                 ClientAction::RequestTypoCorrection => {
+                    candidates.typos_requested = true;
                     // 補正が取れなくても変換は続けられるので、失敗は記録だけする
                     candidates.typos =
                         ipc_service
@@ -838,5 +858,30 @@ impl TextServiceFactory {
         composition.segment_length = segment_length;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::ipc_service::Prediction;
+
+    // 「もしかして」は読みごとに 1 回だけ求める。Tab で帯を選んでからの Space でも、まだなら求める。再変換では求めない
+    #[test]
+    fn typo_correction_is_requested_once_per_reading() {
+        let mut composition = Composition::default();
+        composition.candidates.predictions = vec![Prediction {
+            text: "おはよう".into(),
+            corresponding_count: 5,
+        }];
+        assert!(composition.has_assist());
+        assert!(composition.should_request_typo_correction());
+
+        composition.candidates.typos_requested = true;
+        assert!(!composition.should_request_typo_correction());
+
+        let mut reconversion = Composition::default();
+        reconversion.reconversion_original = Some("漢字".into());
+        assert!(!reconversion.should_request_typo_correction());
     }
 }

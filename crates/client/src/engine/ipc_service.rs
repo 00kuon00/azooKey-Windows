@@ -29,6 +29,8 @@ pub struct Candidates {
     pub predictions: Vec<Prediction>,
     // 打ち間違いを直した「もしかして」（Space で変換したときに RequestTypoCorrection で取る）
     pub typos: Vec<TypoCandidate>,
+    // この候補（読み）で「もしかして」をもう求めたか。読みが変わると候補ごと作り直されて false に戻る
+    pub typos_requested: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -72,6 +74,7 @@ impl From<shared::proto::ComposingText> for Candidates {
                 })
                 .collect(),
             typos: vec![],
+            typos_requested: false,
         }
     }
 }
