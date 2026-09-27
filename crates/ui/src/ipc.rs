@@ -3,6 +3,8 @@ use shared::proto::{
     SetInputModeRequest, SetPositionRequest, SetSelectionRequest,
 };
 use tokio::sync::mpsc;
+
+use crate::view::CandidateView;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug, Clone)]
@@ -28,10 +30,12 @@ pub enum WindowAction {
         right: i32,
     },
     SetSelection {
+        // shared::proto::SelectionKind の値
+        kind: i32,
         index: i32,
     },
     SetCandidate {
-        candidates: Vec<String>,
+        view: CandidateView,
     },
     SetInputMode(String),
 }
@@ -93,13 +97,22 @@ impl WindowServiceProto for WindowService {
         &self,
         request: Request<SetCandidateRequest>,
     ) -> Result<Response<EmptyResponse>, Status> {
-        let candidate = request.into_inner().candidates;
+        let request = request.into_inner();
+        let view = CandidateView::new(
+            request.candidates,
+            &request.hiragana,
+            request.segment_length.max(0) as usize,
+            request.predictions,
+            request
+                .typo_corrections
+                .into_iter()
+                .map(|typo| (typo.text, typo.hiragana))
+                .collect(),
+        );
 
         self.controller
             .sender
-            .send(WindowAction::SetCandidate {
-                candidates: candidate,
-            })
+            .send(WindowAction::SetCandidate { view })
             .await
             .unwrap();
 
@@ -110,10 +123,13 @@ impl WindowServiceProto for WindowService {
         &self,
         request: Request<SetSelectionRequest>,
     ) -> Result<Response<EmptyResponse>, Status> {
-        let index = request.into_inner().index;
+        let request = request.into_inner();
         self.controller
             .sender
-            .send(WindowAction::SetSelection { index })
+            .send(WindowAction::SetSelection {
+                kind: request.kind,
+                index: request.index,
+            })
             .await
             .unwrap();
 

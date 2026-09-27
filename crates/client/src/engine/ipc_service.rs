@@ -25,6 +25,58 @@ pub struct Candidates {
     pub sub_texts: Vec<String>,
     pub hiragana: String,
     pub corresponding_count: Vec<i32>,
+    // 入力中の読みの続きを補った予測。確定すると入力中の文字列をすべて使う
+    pub predictions: Vec<Prediction>,
+    // 打ち間違いを直した「もしかして」（Space で変換したときに RequestTypoCorrection で取る）
+    pub typos: Vec<TypoCandidate>,
+    // この候補（読み）で「もしかして」をもう求めたか。読みが変わると候補ごと作り直されて false に戻る
+    pub typos_requested: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Prediction {
+    pub text: String,
+    pub corresponding_count: i32, // 入力全体の文字数
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TypoCandidate {
+    pub text: String,             // 直した読みを変換した 1 位
+    pub hiragana: String,         // 直した読み
+    pub corresponding_count: i32, // 入力全体の文字数
+}
+
+impl From<shared::proto::ComposingText> for Candidates {
+    fn from(composing_text: shared::proto::ComposingText) -> Self {
+        Candidates {
+            texts: composing_text
+                .suggestions
+                .iter()
+                .map(|s| s.text.clone())
+                .collect(),
+            sub_texts: composing_text
+                .suggestions
+                .iter()
+                .map(|s| s.subtext.clone())
+                .collect(),
+            hiragana: composing_text.hiragana,
+            corresponding_count: composing_text
+                .suggestions
+                .iter()
+                .map(|s| s.corresponding_count)
+                .collect(),
+            predictions: composing_text
+                .predictions
+                .into_iter()
+                .map(|s| Prediction {
+                    text: s.text,
+                    corresponding_count: s.corresponding_count,
+                })
+                .collect(),
+            typos: vec![],
+            typos_requested: false,
+        }
+    }
 }
 
 impl IPCService {
@@ -94,24 +146,7 @@ impl IPCService {
         let composing_text = response.into_inner().composing_text;
 
         let candidates = if let Some(composing_text) = composing_text {
-            Candidates {
-                texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.text.clone())
-                    .collect(),
-                sub_texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.subtext.clone())
-                    .collect(),
-                hiragana: composing_text.hiragana,
-                corresponding_count: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.corresponding_count)
-                    .collect(),
-            }
+            Candidates::from(composing_text)
         } else {
             anyhow::bail!("composing_text is None");
         };
@@ -129,24 +164,7 @@ impl IPCService {
         let composing_text = response.into_inner().composing_text;
 
         let candidates = if let Some(composing_text) = composing_text {
-            Candidates {
-                texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.text.clone())
-                    .collect(),
-                sub_texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.subtext.clone())
-                    .collect(),
-                hiragana: composing_text.hiragana,
-                corresponding_count: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.corresponding_count)
-                    .collect(),
-            }
+            Candidates::from(composing_text)
         } else {
             anyhow::bail!("composing_text is None");
         };
@@ -175,24 +193,7 @@ impl IPCService {
         let composing_text = response.into_inner().composing_text;
 
         let candidates = if let Some(composing_text) = composing_text {
-            Candidates {
-                texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.text.clone())
-                    .collect(),
-                sub_texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.subtext.clone())
-                    .collect(),
-                hiragana: composing_text.hiragana,
-                corresponding_count: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.corresponding_count)
-                    .collect(),
-            }
+            Candidates::from(composing_text)
         } else {
             anyhow::bail!("composing_text is None");
         };
@@ -211,24 +212,7 @@ impl IPCService {
         let composing_text = response.into_inner().composing_text;
 
         let candidates = if let Some(composing_text) = composing_text {
-            Candidates {
-                texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.text.clone())
-                    .collect(),
-                sub_texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.subtext.clone())
-                    .collect(),
-                hiragana: composing_text.hiragana,
-                corresponding_count: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.corresponding_count)
-                    .collect(),
-            }
+            Candidates::from(composing_text)
         } else {
             anyhow::bail!("composing_text is None");
         };
@@ -257,24 +241,7 @@ impl IPCService {
         let composing_text = response.into_inner().composing_text;
 
         let candidates = if let Some(composing_text) = composing_text {
-            Candidates {
-                texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.text.clone())
-                    .collect(),
-                sub_texts: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.subtext.clone())
-                    .collect(),
-                hiragana: composing_text.hiragana,
-                corresponding_count: composing_text
-                    .suggestions
-                    .iter()
-                    .map(|s| s.corresponding_count)
-                    .collect(),
-            }
+            Candidates::from(composing_text)
         } else {
             anyhow::bail!("composing_text is None");
         };
@@ -295,24 +262,27 @@ impl IPCService {
             .composing_text
             .context("composing_text is None")?;
 
-        Ok(Candidates {
-            texts: composing_text
-                .suggestions
-                .iter()
-                .map(|s| s.text.clone())
-                .collect(),
-            sub_texts: composing_text
-                .suggestions
-                .iter()
-                .map(|s| s.subtext.clone())
-                .collect(),
-            hiragana: composing_text.hiragana,
-            corresponding_count: composing_text
-                .suggestions
-                .iter()
-                .map(|s| s.corresponding_count)
-                .collect(),
-        })
+        Ok(Candidates::from(composing_text))
+    }
+
+    /// 打ち間違いを直した「もしかして」を取る（Zenzai が無効なら空）
+    #[tracing::instrument]
+    pub fn request_typo_correction(&mut self) -> anyhow::Result<Vec<TypoCandidate>> {
+        let request = tonic::Request::new(shared::proto::RequestTypoCorrectionRequest {});
+        let response = self
+            .runtime
+            .clone()
+            .block_on(self.azookey_client.request_typo_correction(request))?;
+        Ok(response
+            .into_inner()
+            .corrections
+            .into_iter()
+            .map(|c| TypoCandidate {
+                text: c.text,
+                hiragana: c.hiragana,
+                corresponding_count: c.corresponding_count,
+            })
+            .collect())
     }
 
     pub fn set_context(&mut self, context: String) -> anyhow::Result<()> {
@@ -372,8 +342,31 @@ impl IPCService {
     }
 
     #[tracing::instrument]
-    pub fn set_candidates(&mut self, candidates: Vec<String>) -> anyhow::Result<()> {
-        let request = tonic::Request::new(shared::proto::SetCandidateRequest { candidates });
+    /// 候補ウィンドウに、変換候補・読み・予測・もしかしてを送る。
+    /// `segment_length` は Shift+←→ で区切った最初の文節の読みの文字数（区切っていなければ 0）
+    pub fn set_candidates(
+        &mut self,
+        candidates: &Candidates,
+        segment_length: i32,
+    ) -> anyhow::Result<()> {
+        let request = tonic::Request::new(shared::proto::SetCandidateRequest {
+            candidates: candidates.texts.clone(),
+            hiragana: candidates.hiragana.clone(),
+            segment_length,
+            predictions: candidates
+                .predictions
+                .iter()
+                .map(|p| p.text.clone())
+                .collect(),
+            typo_corrections: candidates
+                .typos
+                .iter()
+                .map(|t| shared::proto::TypoCandidate {
+                    text: t.text.clone(),
+                    hiragana: t.hiragana.clone(),
+                })
+                .collect(),
+        });
         self.runtime
             .clone()
             .block_on(self.window_client.set_candidate(request))?;
@@ -382,8 +375,15 @@ impl IPCService {
     }
 
     #[tracing::instrument]
-    pub fn set_selection(&mut self, index: i32) -> anyhow::Result<()> {
-        let request = tonic::Request::new(shared::proto::SetSelectionRequest { index });
+    pub fn set_selection(
+        &mut self,
+        kind: shared::proto::SelectionKind,
+        index: i32,
+    ) -> anyhow::Result<()> {
+        let request = tonic::Request::new(shared::proto::SetSelectionRequest {
+            index,
+            kind: kind as i32,
+        });
         self.runtime
             .clone()
             .block_on(self.window_client.set_selection(request))?;

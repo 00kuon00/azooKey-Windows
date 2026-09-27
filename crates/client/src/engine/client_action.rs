@@ -19,6 +19,10 @@ pub enum ClientAction {
 
     MoveCursor(i32),
     SetSelection(SetSelectionType),
+    // 帯（予測・もしかして）の次を選ぶ（Tab）。false なら前（Shift+Tab）。帯の端を越えると変換候補の一覧に戻る
+    SelectAssist(bool),
+    // 打ち間違いを直した「もしかして」をサーバに求め、帯に出す（Space で変換したとき）
+    RequestTypoCorrection,
     // 最初の文節の読みを増減する（Shift+←→）。値は増やす文字数
     MoveSegmentBoundary(i32),
 

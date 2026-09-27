@@ -28,12 +28,14 @@ pub mod indicator;
 pub mod ipc;
 pub mod uiaccess;
 pub mod utils;
+pub mod view;
 
 #[derive(Debug)]
 pub enum UserEvent {
     UpdateHeight(i32),
     UpdateCandidates(String),
-    UpdateSelection(i32),
+    // (shared::proto::SelectionKind の値, 添字)
+    UpdateSelection(i32, i32),
     UpdateInputMethod(String),
     WindowAction(WindowAction),
 }
@@ -121,16 +123,15 @@ async fn main() -> anyhow::Result<()> {
                         }))
                         .unwrap();
                 }
-                WindowAction::SetCandidate { candidates } => {
+                WindowAction::SetCandidate { view } => {
                     proxy_clone
-                        .send_event(UserEvent::WindowAction(WindowAction::SetCandidate {
-                            candidates,
-                        }))
+                        .send_event(UserEvent::WindowAction(WindowAction::SetCandidate { view }))
                         .unwrap();
                 }
-                WindowAction::SetSelection { index } => {
+                WindowAction::SetSelection { kind, index } => {
                     proxy_clone
                         .send_event(UserEvent::WindowAction(WindowAction::SetSelection {
+                            kind,
                             index,
                         }))
                         .unwrap();
@@ -145,6 +146,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // 直近の SetPosition の入力位置。帯の行数で高さが変わったとき、上下の反転を決め直す
+    let mut last_position: Option<(i32, i32, i32, i32)> = None;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -163,9 +167,9 @@ async fn main() -> anyhow::Result<()> {
                         .evaluate_script(&format!("updateCandidates({})", candidates))
                         .unwrap();
                 }
-                UserEvent::UpdateSelection(index) => {
+                UserEvent::UpdateSelection(kind, index) => {
                     candidate_webview
-                        .evaluate_script(&format!("updateSelection({})", index))
+                        .evaluate_script(&format!("updateSelection({}, {})", kind, index))
                         .unwrap();
                 }
                 UserEvent::UpdateInputMethod(input_method) => {
@@ -178,6 +182,16 @@ async fn main() -> anyhow::Result<()> {
                     let scale = candidate_window.scale_factor();
                     let width = candidate_window.inner_size().to_logical::<f64>(scale).width;
                     candidate_window.set_inner_size(LogicalSize::new(width, height as f64));
+                    if let Some((top, left, bottom, right)) = last_position {
+                        let (x, y) = get_candidate_window_position(
+                            top,
+                            left,
+                            bottom,
+                            right,
+                            &candidate_window,
+                        );
+                        candidate_window.set_outer_position(PhysicalPosition::new(x, y));
+                    }
                 }
                 UserEvent::WindowAction(action) => {
                     match action {
@@ -223,6 +237,7 @@ async fn main() -> anyhow::Result<()> {
                             bottom,
                             right,
                         } => {
+                            last_position = Some((top, left, bottom, right));
                             let (x, y) = get_candidate_window_position(
                                 top,
                                 left,
@@ -259,12 +274,8 @@ async fn main() -> anyhow::Result<()> {
                                 bottom as f64,
                             ));
                         }
-                        WindowAction::SetCandidate { candidates } => {
-                            let max_len = candidates
-                                .iter()
-                                .map(|s| s.chars().count())
-                                .max()
-                                .unwrap_or(0) as u32;
+                        WindowAction::SetCandidate { view } => {
+                            let max_len = view.max_len();
 
                             let scale = candidate_window.scale_factor();
                             let width = candidate_window_width(max_len)
@@ -275,8 +286,19 @@ async fn main() -> anyhow::Result<()> {
                                 .to_logical::<f64>(scale)
                                 .height;
                             candidate_window.set_inner_size(LogicalSize::new(width, height));
+                            // 幅だけ広がったときも、画面の右端からはみ出さないよう位置を取り直す
+                            if let Some((top, left, bottom, right)) = last_position {
+                                let (x, y) = get_candidate_window_position(
+                                    top,
+                                    left,
+                                    bottom,
+                                    right,
+                                    &candidate_window,
+                                );
+                                candidate_window.set_outer_position(PhysicalPosition::new(x, y));
+                            }
 
-                            let candidates = serde_json::to_string(&candidates)
+                            let candidates = serde_json::to_string(&view)
                                 .context("Failed to serialize candidates")
                                 .unwrap();
 
@@ -284,9 +306,9 @@ async fn main() -> anyhow::Result<()> {
                                 .send_event(UserEvent::UpdateCandidates(candidates))
                                 .unwrap();
                         }
-                        WindowAction::SetSelection { index } => {
+                        WindowAction::SetSelection { kind, index } => {
                             event_loop_proxy
-                                .send_event(UserEvent::UpdateSelection(index))
+                                .send_event(UserEvent::UpdateSelection(kind, index))
                                 .unwrap();
                         }
                         WindowAction::SetInputMode(input_method) => {
