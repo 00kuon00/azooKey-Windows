@@ -470,7 +470,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .build_v1()
                 .unwrap(),
         )
-        .serve_with_incoming(TonicNamedPipeServer::new("azookey_server"))
+        .serve_with_incoming(TonicNamedPipeServer::new(&shared::server_pipe_name()))
         .await?;
 
     Ok(())

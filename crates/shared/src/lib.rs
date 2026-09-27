@@ -15,6 +15,13 @@ fn get_config_root() -> PathBuf {
 
 const SETTINGS_FILENAME: &str = "settings.json";
 
+/// 変換エンジン（azookey-server）の名前付きパイプの名前。
+/// 開発中に常駐のエンジンを止めずに自分のビルドを並べて動かせるよう、環境変数 AZOOKEY_PIPE_NAME で変えられる
+/// （変換サーバと設定アプリだけが見る。IME 本体は既定の名前につなぐ）
+pub fn server_pipe_name() -> String {
+    std::env::var("AZOOKEY_PIPE_NAME").unwrap_or_else(|_| "azookey_server".to_string())
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ZenzaiConfig {
     pub enable: bool,
