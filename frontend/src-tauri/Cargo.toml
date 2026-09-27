@@ -29,6 +29,9 @@ tonic = "0.12.3"
 tokio = { version = "1.42.0", features = ["rt-multi-thread"] }
 tower = "0.5.1"
 hyper-util = { version = "0.1.9", features = ["tokio"] }
+# ユーザー辞書の登録候補（#17）: 語の拾い出しと、読みを付けるローカル LLM への問い合わせ
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
 
 [dependencies.windows]
 version = "0.58.0"

@@ -71,6 +71,37 @@ impl IPCService {
             .collect())
     }
 
+    /// 語が登録しなくても変換できるかを調べさせる（ユーザー辞書の登録候補・#17）
+    pub fn check_convertibility(
+        &mut self,
+        queries: &[(String, String)],
+    ) -> anyhow::Result<Vec<crate::suggestion::Convertibility>> {
+        let request = tonic::Request::new(shared::proto::CheckConvertibilityRequest {
+            queries: queries
+                .iter()
+                .map(|(word, reading)| shared::proto::ConvertibilityQuery {
+                    word: word.clone(),
+                    reading: reading.clone(),
+                })
+                .collect(),
+        });
+        let response = self
+            .runtime
+            .clone()
+            .block_on(self.azookey_client.check_convertibility(request))?;
+
+        Ok(response
+            .into_inner()
+            .results
+            .into_iter()
+            .map(|result| crate::suggestion::Convertibility {
+                word: result.word,
+                reading: result.reading,
+                convertible: result.convertible,
+            })
+            .collect())
+    }
+
     pub fn reset_learning(&mut self) -> anyhow::Result<()> {
         let request = tonic::Request::new(shared::proto::ResetLearningRequest {});
         self.runtime
