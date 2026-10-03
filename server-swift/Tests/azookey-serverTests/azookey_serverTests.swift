@@ -772,6 +772,101 @@ extension GlobalStateTests {
 }
 }
 
+// 絵文字辞書（#22）: getOptions() のたびに読み直さない
+extension GlobalStateTests {
+@MainActor @Suite struct EmojiDictionaryTests {
+    init() {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        execURL = root.appendingPathComponent("azooKey_emoji_dictionary_storage")
+        config["enable"] = false
+        config["profile"] = ""
+        config["context"] = ""
+        learningType = .nothing
+        let workURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-emoji-test-\(UUID().uuidString)", isDirectory: true)
+        memoryDirectoryURL = workURL.appendingPathComponent("memory", isDirectory: true)
+        userDictionaryURL = workURL.appendingPathComponent("user_dictionary", isDirectory: true)
+        converter = KanaKanjiConverter(
+            dictionaryURL: root.appendingPathComponent("azooKey_dictionary_storage").appendingPathComponent("Dictionary"),
+            preloadDictionary: false
+        )
+        composingText = ComposingText()
+    }
+
+    func candidates(_ roman: String) -> [String] {
+        for character in roman {
+            let cursor = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+            free(append_text(input: String(character), cursorPtr: cursor))
+            cursor.deallocate()
+        }
+        let length = UnsafeMutablePointer<Int>.allocate(capacity: 1)
+        defer { length.deallocate() }
+        let list = get_composed_text(lengthPtr: length)
+        return (0..<length.pointee).map { String(cString: list[$0]!.pointee.text) }
+    }
+
+    // 「えがお」で 😊 が候補に出る（修正前の版で出ていたもの）
+    @Test func emojiCandidateAppears() {
+        #expect(candidates("egao").contains("😊"))
+        clear_text()
+    }
+
+    func emojiSearch() -> [String] {
+        getOptions().textReplacer.getSearchResult(query: "えがお", target: [.emoji]).map(\.text)
+    }
+
+    // 絵文字辞書は最初の getOptions() で 1 回だけ読む。読んだあとでファイルを消しても、読んだ辞書のまま引ける
+    @Test func emojiDictionaryIsLoadedOnce() throws {
+        let root = URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let workURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-emoji-once-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workURL) }
+        try FileManager.default.copyItem(
+            at: root.appendingPathComponent("azooKey_emoji_dictionary_storage").appendingPathComponent("EmojiDictionary"),
+            to: workURL.appendingPathComponent("EmojiDictionary")
+        )
+        execURL = workURL
+        let first = emojiSearch()
+        #expect(!first.isEmpty)
+
+        try FileManager.default.removeItem(at: workURL.appendingPathComponent("EmojiDictionary"))
+        #expect(emojiSearch() == first)
+    }
+
+    // execURL が変わったら、新しい場所の絵文字辞書を読み直す
+    @Test func emojiDictionaryFollowsExecURL() {
+        let original = execURL
+        #expect(!emojiSearch().isEmpty)
+        execURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("azookey-emoji-missing-\(UUID().uuidString)", isDirectory: true)
+        #expect(emojiSearch().isEmpty)
+        execURL = original
+        #expect(!emojiSearch().isEmpty)
+    }
+
+    // getOptions() 1 回の時間（合否は付けない。結果は出力に書く）
+    @Test func measureGetOptions() {
+        _ = getOptions()
+        var all: [Double] = []
+        for _ in 0..<100 {
+            let start = Date()
+            _ = getOptions()
+            all.append(-start.timeIntervalSinceNow)
+        }
+        let sorted = all.sorted()
+        print(String(format: "EMOJI-BENCH getOptions: median %.3f ms / max %.3f ms (n=%d)",
+                     sorted[sorted.count / 2] * 1000, sorted.last! * 1000, sorted.count))
+    }
+}
+}
+
 // Zenzai を有効にした変換。zenz.gguf が要るので、環境変数 AZOOKEY_ZENZ_GGUF にその場所を渡したときだけ走らせる
 // （例: AZOOKEY_ZENZ_GGUF=<リポジトリ>\zenz.gguf swift test --filter ZenzaiSessionTests）
 extension GlobalStateTests {

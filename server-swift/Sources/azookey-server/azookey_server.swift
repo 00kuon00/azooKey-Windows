@@ -92,6 +92,20 @@ func gpuLayerCount(backend: String) -> Int32 {
     }
 }
 
+// 絵文字辞書。TextReplacer は作るたびにファイル（約 190KB）を読んで組み立てる（1 回 25 ms ほど）ので、
+// 1 回だけ作って getOptions() で使い回す。場所は execURL で決まる（テストでは差し替える）ので、場所が変わったときだけ作り直す
+@MainActor var emojiTextReplacer: (url: URL, replacer: TextReplacer)?
+
+@MainActor func emojiReplacer() -> TextReplacer {
+    let url = execURL.appendingPathComponent("EmojiDictionary").appendingPathComponent("emoji_all_E15.1.txt")
+    if let cached = emojiTextReplacer, cached.url == url {
+        return cached.replacer
+    }
+    let replacer = TextReplacer { url }
+    emojiTextReplacer = (url, replacer)
+    return replacer
+}
+
 @MainActor func getOptions(context: String = "") -> ConvertRequestOptions {
     return ConvertRequestOptions(
         // 予測は候補（mainResults）に混ぜず predictionResults に分けて受け取る（GetPredictions）。
@@ -103,9 +117,7 @@ func gpuLayerCount(backend: String) -> Int32 {
         memoryDirectoryURL: memoryDirectoryURL,
         // ユーザー辞書（user.louds など）の場所。エンジンは変換のたびにここを見る
         sharedContainerURL: userDictionaryURL,
-        textReplacer: .init {
-            return execURL.appendingPathComponent("EmojiDictionary").appendingPathComponent("emoji_all_E15.1.txt")
-        },
+        textReplacer: emojiReplacer(),
         specialCandidateProviders: nil,
         // zenzai
         zenzaiMode: config["enable"] as! Bool ? .on(
