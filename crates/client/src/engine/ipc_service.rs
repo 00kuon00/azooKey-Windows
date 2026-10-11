@@ -308,8 +308,7 @@ impl IPCService {
     /// 語を覚える（F10 で英字に直した語は english = true、F6 でひらがなに直した語は false）
     #[tracing::instrument]
     pub fn learn_english_word(&mut self, word: String, english: bool) -> anyhow::Result<()> {
-        let request =
-            tonic::Request::new(shared::proto::LearnEnglishWordRequest { word, english });
+        let request = tonic::Request::new(shared::proto::LearnEnglishWordRequest { word, english });
         self.runtime
             .clone()
             .block_on(self.azookey_client.learn_english_word(request))?;

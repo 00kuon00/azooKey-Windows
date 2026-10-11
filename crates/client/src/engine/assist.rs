@@ -146,7 +146,10 @@ mod tests {
         let position = EnglishRowPosition::AfterPredictions;
         assert_eq!(None.next(&rows(0, 0, 2, false), position, true), Typo(0));
         assert_eq!(Typo(1).next(&rows(0, 0, 2, false), position, true), None);
-        assert_eq!(None.next(&rows(0, 3, 0, false), position, false), Prediction(2));
+        assert_eq!(
+            None.next(&rows(0, 3, 0, false), position, false),
+            Prediction(2)
+        );
         assert_eq!(None.next(&rows(1, 0, 0, false), position, true), English(0));
     }
 
@@ -168,7 +171,12 @@ mod tests {
             vec![English(0), Prediction(0), Typo(0), None]
         );
         assert_eq!(
-            walk(&rows(1, 1, 0, true), EnglishRowPosition::AfterPredictions, true, 3),
+            walk(
+                &rows(1, 1, 0, true),
+                EnglishRowPosition::AfterPredictions,
+                true,
+                3
+            ),
             vec![English(0), Prediction(0), None]
         );
     }

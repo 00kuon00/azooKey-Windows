@@ -235,7 +235,11 @@ fn set_english_word(
 ) -> Result<english::WordList, String> {
     let root = english::config_root();
     english::set_learned(&root, &word, direction).map_err(|e| e.to_string())?;
-    state.ipc.clone().update_config().map_err(|e| e.to_string())?;
+    state
+        .ipc
+        .clone()
+        .update_config()
+        .map_err(|e| e.to_string())?;
     Ok(english::word_list(&root))
 }
 

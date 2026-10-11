@@ -95,7 +95,11 @@ impl CandidateView {
     }
 
     /// 帯の英字の候補を足す。`english` は（文全体, 英字のまま入れた語, 覚えた語を含むか）
-    pub fn with_english(mut self, english: Vec<(String, Vec<String>, bool)>, english_first: bool) -> Self {
+    pub fn with_english(
+        mut self,
+        english: Vec<(String, Vec<String>, bool)>,
+        english_first: bool,
+    ) -> Self {
         self.english = english
             .into_iter()
             .map(|(text, words, learned)| English {
@@ -318,10 +322,17 @@ mod tests {
     fn english_words_are_marked() {
         assert_eq!(
             english_spans("今日はgoogleで検索", &["google".into()]),
-            vec![span("今日は", ""), span("google", "english"), span("で検索", "")]
+            vec![
+                span("今日は", ""),
+                span("google", "english"),
+                span("で検索", "")
+            ]
         );
         assert_eq!(
-            english_spans("今週はopencodeでPRを出す", &["opencode".into(), "PR".into()]),
+            english_spans(
+                "今週はopencodeでPRを出す",
+                &["opencode".into(), "PR".into()]
+            ),
             vec![
                 span("今週は", ""),
                 span("opencode", "english"),
@@ -330,17 +341,39 @@ mod tests {
                 span("を出す", ""),
             ]
         );
-        assert_eq!(english_spans("claude", &["claude".into()]), vec![span("claude", "english")]);
+        assert_eq!(
+            english_spans("claude", &["claude".into()]),
+            vec![span("claude", "english")]
+        );
         // 見つからない語は印を付けずに飛ばす
-        assert_eq!(english_spans("まで", &["made".into()]), vec![span("まで", "")]);
+        assert_eq!(
+            english_spans("まで", &["made".into()]),
+            vec![span("まで", "")]
+        );
     }
 
     // 幅は英字の候補も見出し（英字）を含めて決める
     #[test]
     fn max_len_includes_english_with_heading() {
-        let view = CandidateView::new(vec!["強はごおgェで検索".into()], "きょうはごおgぇでけんさく", 0, vec![], vec![])
-            .with_english(vec![("githubのissueをclaudeに任せた".into(), vec!["github".into(), "issue".into(), "claude".into()], false)], false);
-        assert_eq!(view.max_len(), 2 + "githubのissueをclaudeに任せた".chars().count() as u32);
+        let view = CandidateView::new(
+            vec!["強はごおgェで検索".into()],
+            "きょうはごおgぇでけんさく",
+            0,
+            vec![],
+            vec![],
+        )
+        .with_english(
+            vec![(
+                "githubのissueをclaudeに任せた".into(),
+                vec!["github".into(), "issue".into(), "claude".into()],
+                false,
+            )],
+            false,
+        );
+        assert_eq!(
+            view.max_len(),
+            2 + "githubのissueをclaudeに任せた".chars().count() as u32
+        );
         assert!(!view.english_first);
     }
 

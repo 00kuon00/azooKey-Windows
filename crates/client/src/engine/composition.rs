@@ -753,7 +753,8 @@ impl TextServiceFactory {
                     if let (Some(english), Some(word), true) =
                         (learn, word_to_learn(&raw_input), learning_allowed)
                     {
-                        if let Err(error) = ipc_service.learn_english_word(word.to_string(), english)
+                        if let Err(error) =
+                            ipc_service.learn_english_word(word.to_string(), english)
                         {
                             tracing::warn!("Failed to learn english word: {error:?}");
                         }
