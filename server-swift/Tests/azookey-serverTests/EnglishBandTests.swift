@@ -136,6 +136,24 @@ extension GlobalStateTests {
         clear_text()
     }
 
+    // 自分の語彙を作る: 日本語として打った文で英単語に取ってしまう語（made → までに）を外し、ほかは残す
+    @Test func buildVocabularyRemovesJapaneseRomaji() {
+        let input = EnglishVocabularyInput(
+            counts: ["made": 12, "opencode": 207, "claude": 1285, "anime": 5, "ui": 2],
+            japanese: ["明日までに", "今日はアニメを見た", "これまでの話", "設定画面"]
+        )
+        let output = buildEnglishVocabulary(input)
+        #expect(output.words["opencode"] == 207)
+        #expect(output.words["claude"] == 1285)
+        // まで・アニメ（あにめを）は日本語として打っている
+        #expect(output.words["made"] == nil)
+        #expect(output.removed["made"] != nil)
+        #expect(output.words["anime"] == nil)
+        // 3 回未満は入れない
+        #expect(output.words["ui"] == nil)
+        #expect(!output.builtAt.isEmpty)
+    }
+
     // 設定で OFF にすると出さない
     @Test func disabledHasNoBand() {
         englishEnabled = false

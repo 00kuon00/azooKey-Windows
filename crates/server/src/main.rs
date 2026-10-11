@@ -52,6 +52,22 @@ unsafe extern "C" {
     fn CheckConvertibility(queries: *const c_char) -> *mut c_char;
     fn GetEnglishCandidates() -> *mut c_char;
     fn LearnEnglishWord(word: *const c_char, english: bool);
+    fn BuildEnglishVocabulary(
+        path: *const c_char,
+        inputPath: *const c_char,
+        outputPath: *const c_char,
+    ) -> bool;
+}
+
+/// 設定画面の「自分の語彙を作り直す」（#26）。常駐の変換エンジンとは別のプロセスで、変換器を作らずに語彙だけ作る。
+/// 使い方: azookey-server.exe --build-english-vocabulary <入力の JSON> <出力の JSON>
+fn build_english_vocabulary(exe_dir: &str, input: &str, output: &str) -> bool {
+    let (Ok(exe_dir), Ok(input), Ok(output)) =
+        (CString::new(exe_dir), CString::new(input), CString::new(output))
+    else {
+        return false;
+    };
+    unsafe { BuildEnglishVocabulary(exe_dir.as_ptr(), input.as_ptr(), output.as_ptr()) }
 }
 
 #[derive(serde::Deserialize)]
@@ -493,10 +509,21 @@ impl AzookeyService for MyAzookeyService {
 // Swift 側の FFI 関数は @MainActor なので、tonic のハンドラを 1 本のスレッドで動かす
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("AzookeyServer started");
     // get executable directory
     let current_exe = std::env::current_exe()?;
     let parent_dir = current_exe.parent().unwrap();
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--build-english-vocabulary") {
+        let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
+            eprintln!("usage: azookey-server.exe --build-english-vocabulary <input.json> <output.json>");
+            std::process::exit(2);
+        };
+        let ok = build_english_vocabulary(parent_dir.to_str().unwrap(), input, output);
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
+    println!("AzookeyServer started");
     initialize(parent_dir.to_str().unwrap());
 
     let service = MyAzookeyService::default();

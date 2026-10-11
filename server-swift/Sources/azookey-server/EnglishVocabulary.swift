@@ -169,3 +169,82 @@ func buildOwnVocabulary(
     }
     return (words.subtracting(removed.keys), removed)
 }
+
+/// 設定画面の「自分の語彙を作り直す」で渡すもの（設定アプリが会話ログ・Vault を読んで作る）
+struct EnglishVocabularyInput: Codable {
+    /// 英字の語（小文字）と、会話ログ・Vault に出た回数
+    var counts: [String: Int]
+    /// 自分が打った発言の日本語の部分（漢字・かな）。語彙から、日本語として打つローマ字と重なる語を外すのに使う
+    var japanese: [String]
+}
+
+/// 自分の語彙を作る。日本語の部分に辞書の逆引きで読みを付けてローマ字にし、語ごとに英単語に取ってしまわないかを確かめる。
+/// 進み具合は `progress`（段階・済んだ数・全体の数）で知らせる
+@MainActor func buildEnglishVocabulary(
+    _ input: EnglishVocabularyInput,
+    progress: (_ phase: String, _ done: Int, _ total: Int) -> Void = { _, _, _ in }
+) -> EnglishVocabularyFile {
+    let index = ReadingIndex(files: ReadingIndex.loadFiles(in: systemDictionaryURL.appendingPathComponent("louds", isDirectory: true)))
+    let surfaces = Array(Set(input.japanese.filter { $0.count <= maxReconversionSurfaceLength }))
+    let withKanji = surfaces.filter { $0.contains(where: isKanjiForReading) }
+    var matches: [String: [Range<Int>: [(reading: String, value: Float)]]] = [:]
+    let chunk = 2000
+    for start in stride(from: 0, to: withKanji.count, by: chunk) {
+        progress("readings", start, withKanji.count)
+        matches.merge(index.lookupMany(Array(withKanji[start..<min(withKanji.count, start + chunk)]))) { $1 }
+    }
+    progress("readings", withKanji.count, withKanji.count)
+    var inputs: [String] = []
+    for surface in surfaces {
+        guard let reading = inferReadings(for: surface, lookup: { _ in matches[surface] ?? [:] }).first,
+              let roman = romanize(hiragana: reading),
+              readRomaji(roman).kana == reading else { continue }
+        inputs.append(roman)
+    }
+    progress("words", 0, input.counts.count)
+    let (words, removed) = buildOwnVocabulary(
+        counts: input.counts,
+        japaneseInputs: inputs,
+        bundledWords: englishLexicon.bundledWords
+    )
+    progress("words", input.counts.count, input.counts.count)
+    let formatter = ISO8601DateFormatter()
+    return EnglishVocabularyFile(
+        words: input.counts.filter { words.contains($0.key) },
+        removed: removed,
+        builtAt: formatter.string(from: Date())
+    )
+}
+
+/// 設定アプリから別のプロセス（azookey-server.exe --build-english-vocabulary）で呼ぶ。
+/// 常駐の変換エンジンと違って変換器も Zenzai も作らず、辞書の逆引きと判定だけを使う。
+/// `inputPath` の EnglishVocabularyInput を読んで、`outputPath` に EnglishVocabularyFile を書く。
+/// 進み具合は標準出力に `progress <段階> <済んだ数> <全体の数>` の行で出す。失敗したら false
+@_silgen_name("BuildEnglishVocabulary")
+@MainActor public func build_english_vocabulary(
+    path: UnsafePointer<CChar>,
+    inputPath: UnsafePointer<CChar>,
+    outputPath: UnsafePointer<CChar>
+) -> Bool {
+    execURL = URL(filePath: String(cString: path))
+    systemDictionaryURL = execURL.appendingPathComponent("Dictionary")
+    reloadEnglishLexicon()
+    guard !englishLexicon.bundledWords.isEmpty else {
+        print("error 同梱の英単語の一覧が読めません")
+        return false
+    }
+    do {
+        let input = try JSONDecoder().decode(EnglishVocabularyInput.self, from: Data(contentsOf: URL(filePath: String(cString: inputPath))))
+        let output = buildEnglishVocabulary(input) { phase, done, total in
+            print("progress \(phase) \(done) \(total)")
+            fflush(stdout)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(output).write(to: URL(filePath: String(cString: outputPath)), options: .atomic)
+        return true
+    } catch {
+        print("error \(error)")
+        return false
+    }
+}
