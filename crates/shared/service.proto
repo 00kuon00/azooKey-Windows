@@ -15,6 +15,16 @@ message ComposingText {
   // 入力中の読みの続きを補った予測（「おはよ」→「おはよう」）。suggestions とは別に並べ、ライブ変換の 1 位には使わない。
   // 確定すると入力中の文字列をすべて使う（subtext は空、corresponding_count は入力全体）
   repeated Suggestion predictions = 3;
+  // 帯に出す英字の候補（日英の自動判定・#26）。英単語の区間は英字のまま・日本語の区間は変換して繋いだ文全体。
+  // ライブ変換の 1 位には使わない。確定すると入力中の文字列をすべて使う
+  repeated EnglishCandidate english = 4;
+}
+
+message EnglishCandidate {
+  string text = 1;               // 文全体（今日はgoogleで検索）
+  repeated string words = 2;     // 英字のまま入れた語（打ったとおり）
+  bool learned = 3;              // F10 で直した語・帯で選んだ語を含む（帯の先頭に出す）
+  int32 corresponding_count = 4; // 入力全体の文字数
 }
 
 // Request message for AppendText.
@@ -120,6 +130,14 @@ message RequestTypoCorrectionResponse {
   repeated TypoCorrection corrections = 1;
 }
 
+// 語を覚える（日英の自動判定・#26）。F10 で英字に直した語・帯で英字の候補を選んだ語は english = true、
+// F6 でひらがなに直した語は english = false（次から英字の候補に入れない）
+message LearnEnglishWordRequest {
+  string word = 1;
+  bool english = 2;
+}
+message LearnEnglishWordResponse {}
+
 message StartReconversionResponse {
   // hiragana は推定した読み。推定できなければ hiragana は空で候補も無い
   ComposingText composing_text = 1;
@@ -159,4 +177,5 @@ service AzookeyService {
   rpc StartReconversion (StartReconversionRequest) returns (StartReconversionResponse);
   rpc RequestTypoCorrection (RequestTypoCorrectionRequest) returns (RequestTypoCorrectionResponse);
   rpc CheckConvertibility (CheckConvertibilityRequest) returns (CheckConvertibilityResponse);
+  rpc LearnEnglishWord (LearnEnglishWordRequest) returns (LearnEnglishWordResponse);
 }

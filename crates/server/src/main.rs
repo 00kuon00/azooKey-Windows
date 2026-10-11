@@ -50,6 +50,35 @@ unsafe extern "C" {
     fn GetPredictions(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
     fn RequestTypoCorrection(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
     fn CheckConvertibility(queries: *const c_char) -> *mut c_char;
+    fn GetEnglishCandidates() -> *mut c_char;
+    fn LearnEnglishWord(word: *const c_char, english: bool);
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawEnglishCandidate {
+    text: String,
+    words: Vec<String>,
+    learned: bool,
+    corresponding_count: i32,
+}
+
+/// 直近の get_composed_text の入力から作った、帯の英字の候補（Swift 側は JSON で返す）
+fn get_english_candidates() -> Vec<shared::proto::EnglishCandidate> {
+    let json = unsafe {
+        let result = GetEnglishCandidates();
+        CStr::from_ptr(result).to_string_lossy().into_owned()
+    };
+    serde_json::from_str::<Vec<RawEnglishCandidate>>(&json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|candidate| shared::proto::EnglishCandidate {
+            text: candidate.text,
+            words: candidate.words,
+            learned: candidate.learned,
+            corresponding_count: candidate.corresponding_count,
+        })
+        .collect()
 }
 
 #[derive(serde::Deserialize)]
@@ -229,13 +258,14 @@ fn get_predictions() -> Vec<Suggestion> {
         .collect()
 }
 
-/// 候補を変換し直し、予測と合わせて返す
+/// 候補を変換し直し、予測・帯の英字の候補と合わせて返す
 fn composing_text(hiragana: String) -> ComposingText {
     let suggestions = get_composed_text();
     ComposingText {
         hiragana,
         suggestions,
         predictions: get_predictions(),
+        english: get_english_candidates(),
     }
 }
 
@@ -435,6 +465,17 @@ impl AzookeyService for MyAzookeyService {
         Ok(Response::new(
             shared::proto::RequestTypoCorrectionResponse { corrections },
         ))
+    }
+
+    async fn learn_english_word(
+        &self,
+        request: Request<shared::proto::LearnEnglishWordRequest>,
+    ) -> Result<Response<shared::proto::LearnEnglishWordResponse>, Status> {
+        let request = request.into_inner();
+        let word =
+            CString::new(request.word).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        unsafe { LearnEnglishWord(word.as_ptr(), request.english) };
+        Ok(Response::new(shared::proto::LearnEnglishWordResponse {}))
     }
 
     async fn check_convertibility(
