@@ -1,3 +1,4 @@
+mod english;
 mod ipc;
 mod suggestion;
 
@@ -16,6 +17,9 @@ pub struct AppState {
     // ユーザー辞書の登録候補（#17）を探している最中か、止めるよう頼まれたか
     suggestion_running: Arc<AtomicBool>,
     suggestion_cancel: Arc<AtomicBool>,
+    // 自分の語彙（日英の自動判定・#26）を作り直している最中か、止めるよう頼まれたか
+    english_running: Arc<AtomicBool>,
+    english_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -25,6 +29,8 @@ impl AppState {
             ipc: ipc::IPCService::new().unwrap(),
             suggestion_running: Arc::new(AtomicBool::new(false)),
             suggestion_cancel: Arc::new(AtomicBool::new(false)),
+            english_running: Arc::new(AtomicBool::new(false)),
+            english_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -213,6 +219,111 @@ fn reject_suggestions(words: Vec<String>) -> Result<(), String> {
     shared::add_rejected_suggestions(&words).map_err(|e| e.to_string())
 }
 
+/// 英字の候補に入れる語・入れない語の一覧（日英の自動判定・#26）
+#[tauri::command]
+fn get_english_words() -> english::WordList {
+    english::word_list(&english::config_root())
+}
+
+/// 語の向きを変える。direction は "english" / "japanese"（外す）/ null（覚えた向きを消して戻す）。
+/// 変換エンジンに読み直させ、新しい一覧を返す
+#[tauri::command]
+fn set_english_word(
+    state: tauri::State<AppState>,
+    word: String,
+    direction: Option<english::Direction>,
+) -> Result<english::WordList, String> {
+    let root = english::config_root();
+    english::set_learned(&root, &word, direction).map_err(|e| e.to_string())?;
+    state.ipc.clone().update_config().map_err(|e| e.to_string())?;
+    Ok(english::word_list(&root))
+}
+
+/// 作り直し終えたときに画面へ送る。止めたときは stopped、失敗したときは error に理由が入る
+#[derive(Debug, Clone, Serialize)]
+struct EnglishVocabularyFinished {
+    list: Option<english::WordList>,
+    stopped: bool,
+    error: Option<String>,
+}
+
+fn rebuild_english_vocabulary(
+    app: &tauri::AppHandle,
+    mut ipc: ipc::IPCService,
+    cancel: &AtomicBool,
+) -> Result<bool, String> {
+    let root = english::config_root();
+    let files = suggestion::material_files(
+        &suggestion::default_claude_projects(),
+        &suggestion::default_vault(),
+    );
+    let Some(material) = english::read_material(&files, cancel, &mut |done, total| {
+        let _ = app.emit(
+            "english-vocabulary-progress",
+            english::Progress {
+                phase: "read".to_string(),
+                done,
+                total,
+            },
+        );
+    }) else {
+        return Ok(false);
+    };
+    let built = english::build_vocabulary(&material, &root, cancel, &mut |progress| {
+        let _ = app.emit("english-vocabulary-progress", progress);
+    })?;
+    if built.is_none() {
+        return Ok(false);
+    }
+    // 常駐の変換エンジンに読み直させる（ファイルの中身が変わっていれば読む）
+    ipc.update_config()
+        .map_err(|e| format!("変換エンジンに読み直させられませんでした: {e}"))?;
+    Ok(true)
+}
+
+/// 自分の語彙を作り直し始める。画面を固めないよう別のスレッドで走らせ、
+/// 進み具合は english-vocabulary-progress、結果は english-vocabulary-finished で送る
+#[tauri::command]
+fn start_english_vocabulary_build(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    if state.english_running.swap(true, Ordering::SeqCst) {
+        return Err("すでに作り直しています".to_string());
+    }
+    state.english_cancel.store(false, Ordering::SeqCst);
+    let running = state.english_running.clone();
+    let cancel = state.english_cancel.clone();
+    let ipc = state.ipc.clone();
+    std::thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rebuild_english_vocabulary(&app, ipc, &cancel)
+        }))
+        .unwrap_or_else(|_| Err("作り直している途中で止まりました".to_string()));
+        let finished = match outcome {
+            Ok(done) => EnglishVocabularyFinished {
+                list: Some(english::word_list(&english::config_root())),
+                stopped: !done,
+                error: None,
+            },
+            Err(error) => EnglishVocabularyFinished {
+                list: None,
+                stopped: false,
+                error: Some(error),
+            },
+        };
+        running.store(false, Ordering::SeqCst);
+        let _ = app.emit("english-vocabulary-finished", finished);
+    });
+    Ok(())
+}
+
+/// 作り直すのを止める（今までの語彙はそのまま）
+#[tauri::command]
+fn stop_english_vocabulary_build(state: tauri::State<AppState>) {
+    state.english_cancel.store(true, Ordering::SeqCst);
+}
+
 #[tauri::command]
 fn reset_learning(state: tauri::State<AppState>) -> Result<(), String> {
     state
@@ -287,6 +398,10 @@ pub fn run() {
             start_suggestion_scan,
             stop_suggestion_scan,
             reject_suggestions,
+            get_english_words,
+            set_english_word,
+            start_english_vocabulary_build,
+            stop_english_vocabulary_build,
             check_capability
         ])
         .run(tauri::generate_context!())
