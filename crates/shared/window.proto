@@ -41,6 +41,8 @@ message SetCandidateRequest {
   repeated TypoCandidate typo_corrections = 5;
   // 英字の候補（#english-row）
   repeated EnglishCandidateView english = 6;
+  // 英字の候補の行を帯の先頭に置くか（false なら 予測 → 英字 → もしかして）。Tab の順と同じにするためクライアントが決める
+  bool english_first = 7;
 }
 
 // どこの候補を選んでいるか

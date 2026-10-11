@@ -108,6 +108,14 @@ impl WindowServiceProto for WindowService {
                 .into_iter()
                 .map(|typo| (typo.text, typo.hiragana))
                 .collect(),
+        )
+        .with_english(
+            request
+                .english
+                .into_iter()
+                .map(|english| (english.text, english.words, english.learned))
+                .collect(),
+            request.english_first,
         );
 
         self.controller

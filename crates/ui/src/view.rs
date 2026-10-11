@@ -27,6 +27,15 @@ pub struct Typo {
     pub reading: Vec<Span>,
 }
 
+/// 帯の英字の候補（#english-row・日英の自動判定 #26）
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct English {
+    /// 文全体。英字のまま入れた語に "english" の印
+    pub text: Vec<Span>,
+    /// 覚えた語を含む
+    pub learned: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CandidateView {
     pub candidates: Vec<String>,
@@ -34,6 +43,10 @@ pub struct CandidateView {
     pub reading: Vec<Span>,
     pub predictions: Vec<Prediction>,
     pub typos: Vec<Typo>,
+    pub english: Vec<English>,
+    /// 英字の候補の行を帯の先頭に置く（false なら 予測 → 英字 → もしかして）
+    #[serde(rename = "englishFirst")]
+    pub english_first: bool,
 }
 
 impl CandidateView {
@@ -76,14 +89,33 @@ impl CandidateView {
             reading,
             predictions,
             typos,
+            english: Vec::new(),
+            english_first: false,
         }
     }
 
-    /// 幅を決める文字数。変換候補・予測・もしかして（語と直した読みを並べる）の長いほう。
+    /// 帯の英字の候補を足す。`english` は（文全体, 英字のまま入れた語, 覚えた語を含むか）
+    pub fn with_english(mut self, english: Vec<(String, Vec<String>, bool)>, english_first: bool) -> Self {
+        self.english = english
+            .into_iter()
+            .map(|(text, words, learned)| English {
+                text: english_spans(&text, &words),
+                learned,
+            })
+            .collect();
+        self.english_first = english_first;
+        self
+    }
+
+    /// 幅を決める文字数。変換候補・予測・もしかして（語と直した読みを並べる）・英字の候補（見出しの「英字」を含む）の長いほう。
     /// 読みは入れない（長い読みは先頭を省いて出す）
     pub fn max_len(&self) -> u32 {
         let candidates = self.candidates.iter().map(|s| s.chars().count());
         let predictions = self.predictions.iter().map(|p| p.text.chars().count());
+        let english = self.english.iter().map(|e| {
+            let text: usize = e.text.iter().map(|s| s.text.chars().count()).sum();
+            "英字".chars().count() + text
+        });
         let typos = self.typos.iter().map(|t| {
             let reading: usize = t.reading.iter().map(|s| s.text.chars().count()).sum();
             t.text.chars().count() + reading
@@ -91,9 +123,39 @@ impl CandidateView {
         candidates
             .chain(predictions)
             .chain(typos)
+            .chain(english)
             .max()
             .unwrap_or(0) as u32
     }
+}
+
+/// 文全体のうち、英字のまま入れた語（前から順に探す）に "english" の印を付ける
+pub fn english_spans(text: &str, words: &[String]) -> Vec<Span> {
+    let mut spans = Vec::new();
+    let mut rest = text;
+    for word in words {
+        let Some(at) = rest.find(word.as_str()) else {
+            continue;
+        };
+        if at > 0 {
+            spans.push(Span {
+                text: rest[..at].to_string(),
+                mark: "",
+            });
+        }
+        spans.push(Span {
+            text: word.clone(),
+            mark: "english",
+        });
+        rest = &rest[at + word.len()..];
+    }
+    if !rest.is_empty() {
+        spans.push(Span {
+            text: rest.to_string(),
+            mark: "",
+        });
+    }
+    spans
 }
 
 /// 予測が読みで始まるなら、読みより後ろの部分
@@ -249,6 +311,37 @@ mod tests {
         assert_eq!(ghost("お早うございます", "おはよ"), None);
         assert_eq!(ghost("おはよ", "おはよ"), None);
         assert_eq!(ghost("おはよう", ""), None);
+    }
+
+    // 英字のまま入れた語に印を付ける（同じ語が 2 回出ても前から順に）
+    #[test]
+    fn english_words_are_marked() {
+        assert_eq!(
+            english_spans("今日はgoogleで検索", &["google".into()]),
+            vec![span("今日は", ""), span("google", "english"), span("で検索", "")]
+        );
+        assert_eq!(
+            english_spans("今週はopencodeでPRを出す", &["opencode".into(), "PR".into()]),
+            vec![
+                span("今週は", ""),
+                span("opencode", "english"),
+                span("で", ""),
+                span("PR", "english"),
+                span("を出す", ""),
+            ]
+        );
+        assert_eq!(english_spans("claude", &["claude".into()]), vec![span("claude", "english")]);
+        // 見つからない語は印を付けずに飛ばす
+        assert_eq!(english_spans("まで", &["made".into()]), vec![span("まで", "")]);
+    }
+
+    // 幅は英字の候補も見出し（英字）を含めて決める
+    #[test]
+    fn max_len_includes_english_with_heading() {
+        let view = CandidateView::new(vec!["強はごおgェで検索".into()], "きょうはごおgぇでけんさく", 0, vec![], vec![])
+            .with_english(vec![("githubのissueをclaudeに任せた".into(), vec!["github".into(), "issue".into(), "claude".into()], false)], false);
+        assert_eq!(view.max_len(), 2 + "githubのissueをclaudeに任せた".chars().count() as u32);
+        assert!(!view.english_first);
     }
 
     // 幅は予測・もしかしても含めて決める。読みは含めない

@@ -407,6 +407,8 @@ impl IPCService {
                     learned: e.learned,
                 })
                 .collect(),
+            english_first: crate::engine::composition::assist_rows(candidates)
+                .english_first(crate::engine::assist::ENGLISH_ROW_POSITION),
         });
         self.runtime
             .clone()
