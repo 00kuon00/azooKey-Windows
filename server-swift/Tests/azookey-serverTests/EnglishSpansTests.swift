@@ -9,7 +9,7 @@ import KanaKanjiConverterModule
     // 同梱の一覧（SCOWL）にある語と大きさ（実際の一覧と同じ値）
     let bundled: [String: Int] = [
         "google": 50, "googled": 50, "ogle": 35, "claude": 50, "made": 35, "name": 35, "sake": 35,
-        "note": 35, "as": 35, "kit": 35, "open": 35, "code": 35, "search": 35, "zen": 50,
+        "note": 35, "as": 35, "kit": 35, "open": 35, "code": 35, "search": 35, "zen": 50, "desk": 35, "mate": 35,
     ]
 
     func spans(_ input: String, own: Set<String> = [], learned: [String: EnglishDirection] = [:]) -> [String] {
@@ -72,6 +72,28 @@ import KanaKanjiConverterModule
         #expect(isReadableAsRomaji("erabi"))
         #expect(spans("zipdetsuikadekiruyounishitai", own: ["zip"]) == ["zip"])
         #expect(spans("sanshouonseinoerabikata") == [])
+    }
+
+    // どの一覧にも無い語の候補が、隣の日本語や英単語まで飲み込まない（区切りのずれ・調整用の期間の例と作った例）
+    @Test func unknownWordDoesNotSwallowNeighbors() {
+        // 英単語 + 助詞 + 英単語
+        #expect(spans("jevnihaqwenwotsukau") == ["jev", "qwen"])
+        // 英単語のすぐ後ろに日本語の名詞（助詞が無い）
+        #expect(spans("gltffairuwohiraku") == ["gltf"])
+        #expect(spans("Jaccardchuuouchi") == ["Jaccard"])
+        // 一覧の語（desk）と一覧に無い続き（mate）
+        #expect(spans("deskmatenoapuriaikonwotsukutte") == ["deskmate"])
+        // 英単語を細切れにしない
+        #expect(spans("Lanczosde") == ["Lanczos"])
+        // 大文字の略語のすぐ後ろに日本語（UI 案）
+        #expect(spans("UIanwotsukutte") == ["UI"])
+    }
+
+    // 上の直しの対: 英字が残る入力でも、日本語の部分（きっと・もっと・一緒に・切手）は英字にしない
+    @Test func japaneseNextToUnknownWordStaysJapanese() {
+        #expect(spans("jevhakittokuru") == ["jev"])
+        #expect(spans("qwenwomottoisshonitsukau") == ["qwen"])
+        #expect(spans("gltfnokittewokau") == ["gltf"])
     }
 
     // 大文字で打った英字は、ローマ字にならずに残る

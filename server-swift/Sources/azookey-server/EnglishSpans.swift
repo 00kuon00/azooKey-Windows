@@ -26,10 +26,12 @@ struct EnglishSpanWeights: Sendable {
     /// 同梱の一覧にしか無い語（大きさ 35 のとき。大きさが 50 増えるごとに +1）。
     /// 境目の点をすべて足しても正のままの値にして、日本語として読めるところでは取らせない
     var bundledWord: Float = 2.0
-    /// どの一覧にも無い語（単独ではローマ字として読めないもの）
-    var unknownWord: Float = 2.2
-    /// どの一覧にも無い語のうち、かなとして読める英字 1 文字あたり
-    var unknownKanaLetter: Float = 0.1
+    /// どの一覧にも無い語（単独ではローマ字として読めないもの）。境目の点の合計（1.5）より小さくして、
+    /// 英単語 + 助詞 + 英単語を 1 語にまとめるより 2 語に分けるほうを安くする
+    var unknownWord: Float = 1.2
+    /// どの一覧にも無い語のうち、かなとして読める英字 1 文字あたり。日本語を飲み込んだ候補ほど高くなる。
+    /// 日本語の中の kit + と（きっと）のような候補が 0 を下回らない値にする（1.2 + 0.3 × 2 − 1.5 = 0.3）
+    var unknownKanaLetter: Float = 0.3
     /// 大文字だけの並び（大文字はかなにならないので、日本語として読むと残る英字になる）
     var uppercaseRun: Float = 0.5
     /// F10 で英字に直した語
@@ -195,8 +197,11 @@ func englishSpans(in input: String, lexicon: EnglishLexicon, complete: Bool = fa
             var cost = path.cost + Float(gapReading?.leftover ?? 0) * weights.leftoverLetter
             // 前の英単語の後ろの境目（助詞などで始まる・入力の終わり）
             if boundary > 0 {
-                if let first = gapReading?.kana.first {
-                    if kanaAfterEnglish.contains(first) { cost += weights.particleAfter }
+                if let kana = gapReading?.kana, let first = kana.first {
+                    // 「っ」は「って」のときだけ（gltf + っふぁいる のように、子音を重ねた読みの頭は助詞ではない）
+                    if kanaAfterEnglish.contains(first) && (first != "っ" || kana.dropFirst().first == "て") {
+                        cost += weights.particleAfter
+                    }
                 } else {
                     cost += weights.particleAfter
                 }
@@ -273,9 +278,13 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
         }
     }
     // どの一覧にも無い語（jev・filmroll）。単独ではローマ字として読めず、前がかなの区切り（母音・n・入力の始まり）、
-    // 後ろが入力の終わりか助詞のローマ字のところだけ
+    // 後ろが入力の終わり・助詞のローマ字・子音のあとに子音が続くところ（gltf + ふぁいる。助詞が無くても終われる）。
+    // 一覧にある語の途中から始まるもの（google の gle・desk の sk）と、一覧にある語の頭だけのもの（claude の clau）は、
+    // 語の断片なので作らない（境目をまたいで重なるだけの語は気にしない）
     if lexicon.unknownWords && !ownWordsOnly {
-        let known = Set(candidates.map(\.range))
+        let knownRanges = candidates.map(\.range)
+        let known = Set(knownRanges)
+        let isVowelOrY = { (c: Character) in "aiueoy".contains(c.lowercased()) }
         for start in characters.indices where isLetter(characters[start]) {
             if start > 0, isLetter(characters[start - 1]), !"aiueon".contains(characters[start - 1]) {
                 continue
@@ -289,7 +298,18 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
                     end + particle.count <= characters.count
                         && characters[end..<(end + particle.count)].elementsEqual(particle)
                 }
-                guard atEnd || beforeParticle, !known.contains(range) else { continue }
+                // ch・sh・th・ts の間では切らない（次の母音と組んでひとつのかなになる）
+                var betweenConsonants = false
+                if !atEnd {
+                    let last = Character(characters[end - 1].lowercased())
+                    let next = Character(characters[end].lowercased())
+                    betweenConsonants = !"aiueon".contains(last) && !isVowelOrY(next) && next != "h" && !(last == "t" && next == "s")
+                }
+                guard atEnd || beforeParticle || betweenConsonants, !known.contains(range) else { continue }
+                guard !knownRanges.contains(where: { known in
+                    (known.lowerBound < range.lowerBound && range.lowerBound < known.upperBound)
+                        || (known.lowerBound == range.lowerBound && range.upperBound < known.upperBound)
+                }) else { continue }
                 let leftover = romajiLeftover(String(characters[range]).lowercased())
                 guard leftover > 0 else { continue }
                 // かなとして読める英字が多いほど、日本語を飲み込んでいる見込みが高い（jev + とあいもでる）
@@ -297,7 +317,8 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
             }
         }
     }
-    // 大文字だけの並び（略語）。ローマ字にならないので、そのまま英字として扱う
+    // 大文字だけの並び（略語）。ローマ字にならないので、そのまま英字として扱う。
+    // 後ろに小文字が続く大文字 1 文字（Jaccard の J）は語の頭なので、ここでは取らない（UI + an（案）は取る）
     var start = 0
     while start < characters.count {
         guard characters[start].isASCII, characters[start].isUppercase else {
@@ -308,7 +329,8 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
         while end < characters.count, characters[end].isASCII, characters[end].isUppercase {
             end += 1
         }
-        if !candidates.contains(where: { $0.range == start..<end }) {
+        let capitalizedWordHead = end - start == 1 && end < characters.count && characters[end].isASCII && characters[end].isLowercase
+        if !capitalizedWordHead, !candidates.contains(where: { $0.range == start..<end }) {
             candidates.append(EnglishCandidate(range: start..<end, cost: weights.uppercaseRun))
         }
         start = end
