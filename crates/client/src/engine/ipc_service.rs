@@ -31,6 +31,16 @@ pub struct Candidates {
     pub typos: Vec<TypoCandidate>,
     // この候補（読み）で「もしかして」をもう求めたか。読みが変わると候補ごと作り直されて false に戻る
     pub typos_requested: bool,
+    // 帯の英字の候補（日英の自動判定・#26）。英単語は英字のまま・日本語は変換して繋いだ文全体。確定すると入力中の文字列をすべて使う
+    pub english: Vec<EnglishCandidate>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EnglishCandidate {
+    pub text: String,
+    pub words: Vec<String>,       // 英字のまま入れた語（打ったとおり）
+    pub learned: bool,            // 覚えた語を含む（帯の先頭に出す）
+    pub corresponding_count: i32, // 入力全体の文字数
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -75,6 +85,16 @@ impl From<shared::proto::ComposingText> for Candidates {
                 .collect(),
             typos: vec![],
             typos_requested: false,
+            english: composing_text
+                .english
+                .into_iter()
+                .map(|e| EnglishCandidate {
+                    text: e.text,
+                    words: e.words,
+                    learned: e.learned,
+                    corresponding_count: e.corresponding_count,
+                })
+                .collect(),
         }
     }
 }
@@ -285,6 +305,18 @@ impl IPCService {
             .collect())
     }
 
+    /// 語を覚える（F10 で英字に直した語は english = true、F6 でひらがなに直した語は false）
+    #[tracing::instrument]
+    pub fn learn_english_word(&mut self, word: String, english: bool) -> anyhow::Result<()> {
+        let request =
+            tonic::Request::new(shared::proto::LearnEnglishWordRequest { word, english });
+        self.runtime
+            .clone()
+            .block_on(self.azookey_client.learn_english_word(request))?;
+
+        Ok(())
+    }
+
     pub fn set_context(&mut self, context: String) -> anyhow::Result<()> {
         let request = tonic::Request::new(shared::proto::SetContextRequest { context });
         let _response = self
@@ -364,6 +396,15 @@ impl IPCService {
                 .map(|t| shared::proto::TypoCandidate {
                     text: t.text.clone(),
                     hiragana: t.hiragana.clone(),
+                })
+                .collect(),
+            english: candidates
+                .english
+                .iter()
+                .map(|e| shared::proto::EnglishCandidateView {
+                    text: e.text.clone(),
+                    words: e.words.clone(),
+                    learned: e.learned,
                 })
                 .collect(),
         });

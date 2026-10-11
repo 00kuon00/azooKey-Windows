@@ -7,7 +7,7 @@ use crate::{
 };
 
 use super::{
-    assist::AssistSelection,
+    assist::{AssistRows, AssistSelection, ENGLISH_ROW_POSITION},
     client_action::{ClientAction, SetSelectionType, SetTextType},
     full_width::{to_fullwidth, to_halfwidth},
     input_mode::InputMode,
@@ -50,6 +50,8 @@ pub struct Composition {
     pub candidates: Candidates,
     // F6〜F10 でひらがな・カタカナ・英数に置き換えて表示している（候補ではないので学習しない）
     pub converted_by_function_key: bool,
+    // 最後に押した F6〜F10 の置き換え。確定したとき、F10（英字）・F6（ひらがな）で直した語を覚えるのに使う（#26）
+    pub last_function_key: Option<SetTextType>,
     // 再変換中なら元の文字列（Escape でこれに戻す）。読みを打ち直したら None
     pub reconversion_original: Option<String>,
     // 帯（予測・もしかして）で選んでいるもの。None なら変換候補の一覧の selection_index を選んでいる
@@ -62,15 +64,31 @@ pub struct Composition {
 }
 
 impl Composition {
-    /// 帯（予測・もしかして）に選べるものがあるか。無ければ Tab は今までどおり次の変換候補になる
+    /// 帯（英字の候補・予測・もしかして）に選べるものがあるか。無ければ Tab は今までどおり次の変換候補になる
     pub fn has_assist(&self) -> bool {
-        !self.candidates.predictions.is_empty() || !self.candidates.typos.is_empty()
+        !assist_rows(&self.candidates).is_empty()
     }
 
     /// この読みで「もしかして」をまだ求めていないか。再変換は推定した読みなので求めない
     pub fn should_request_typo_correction(&self) -> bool {
         !self.candidates.typos_requested && self.reconversion_original.is_none()
     }
+}
+
+/// 帯に並ぶ行の数
+pub fn assist_rows(candidates: &Candidates) -> AssistRows {
+    AssistRows {
+        english: candidates.english.len(),
+        predictions: candidates.predictions.len(),
+        typos: candidates.typos.len(),
+        english_learned: candidates.english.iter().any(|e| e.learned),
+    }
+}
+
+/// F10・F6 で直して確定した入力が、覚える語（英字だけの 2 文字以上・#26）ならその語
+pub fn word_to_learn(raw_input: &str) -> Option<&str> {
+    (raw_input.chars().count() >= 2 && raw_input.chars().all(|c| c.is_ascii_alphabetic()))
+        .then_some(raw_input)
 }
 
 /// 帯で選んでいるものの文字列と、確定したときに使う入力の文字数
@@ -80,6 +98,10 @@ pub fn assist_candidate(
 ) -> Option<(String, i32)> {
     match selection {
         AssistSelection::None => None,
+        AssistSelection::English(i) => candidates
+            .english
+            .get(i)
+            .map(|e| (e.text.clone(), e.corresponding_count)),
         AssistSelection::Prediction(i) => candidates
             .predictions
             .get(i)
@@ -482,6 +504,7 @@ impl TextServiceFactory {
         let mut candidates = composition.candidates.clone();
         let mut selection_index = composition.selection_index;
         let mut converted_by_function_key = composition.converted_by_function_key;
+        let mut last_function_key = composition.last_function_key;
         let mut reconversion_original = composition.reconversion_original.clone();
         let mut assist = composition.assist;
         let mut segment_length = composition.segment_length;
@@ -712,10 +735,27 @@ impl TextServiceFactory {
                     };
                     let is_candidate =
                         !converted_by_function_key && shown.as_ref() == Some(&preview);
-                    if is_candidate && self.is_learning_allowed_field().unwrap_or(true) {
+                    let learning_allowed = self.is_learning_allowed_field().unwrap_or(true);
+                    if is_candidate && learning_allowed {
                         // 学習できなくても入力は続けられるので、失敗は記録だけする
                         if let Err(error) = ipc_service.commit_candidate(preview.clone()) {
                             tracing::warn!("Failed to commit candidate: {error:?}");
+                        }
+                    }
+                    // F10 で英字に直した語は次から英字の候補の先頭へ、F6 でひらがなに直した英字の候補の語は次から英字の候補に入れない（#26）
+                    let learn = match (converted_by_function_key, last_function_key) {
+                        (true, Some(SetTextType::HalfLatin)) => Some(true),
+                        (true, Some(SetTextType::Hiragana)) if !candidates.english.is_empty() => {
+                            Some(false)
+                        }
+                        _ => None,
+                    };
+                    if let (Some(english), Some(word), true) =
+                        (learn, word_to_learn(&raw_input), learning_allowed)
+                    {
+                        if let Err(error) = ipc_service.learn_english_word(word.to_string(), english)
+                        {
+                            tracing::warn!("Failed to learn english word: {error:?}");
                         }
                     }
                 }
@@ -744,6 +784,7 @@ impl TextServiceFactory {
                 }
                 ClientAction::SetTextWithType(set_type) => {
                     converted_by_function_key = true;
+                    last_function_key = Some(*set_type);
                     let text = match set_type {
                         SetTextType::Hiragana => raw_hiragana.clone(),
                         SetTextType::Katakana => to_katakana(&raw_hiragana),
@@ -796,19 +837,16 @@ impl TextServiceFactory {
                 }
                 ClientAction::SelectAssist(forward) => {
                     converted_by_function_key = false;
-                    assist = assist.next(
-                        candidates.predictions.len(),
-                        candidates.typos.len(),
-                        *forward,
-                    );
+                    assist = assist.next(&assist_rows(&candidates), ENGLISH_ROW_POSITION, *forward);
                     let selected = match assist {
+                        AssistSelection::English(i) => Some((SelectionKind::English, i)),
                         AssistSelection::Prediction(i) => Some((SelectionKind::Prediction, i)),
                         AssistSelection::Typo(i) => Some((SelectionKind::Typo, i)),
                         AssistSelection::None => None,
                     };
                     match (selected, assist_candidate(&candidates, assist)) {
                         (Some((kind, index)), Some((text, count))) => {
-                            // 予測・もしかしては入力中の文字列をすべて使う（確定しても読みは残らない）
+                            // 英字の候補・予測・もしかしては入力中の文字列をすべて使う（確定しても読みは残らない）
                             preview = text.clone();
                             suffix.clear();
                             corresponding_count = count;
@@ -853,6 +891,7 @@ impl TextServiceFactory {
         composition.suffix = suffix.clone();
         composition.corresponding_count = corresponding_count;
         composition.converted_by_function_key = converted_by_function_key;
+        composition.last_function_key = last_function_key;
         composition.reconversion_original = reconversion_original;
         composition.assist = assist;
         composition.segment_length = segment_length;
@@ -883,5 +922,35 @@ mod tests {
         let mut reconversion = Composition::default();
         reconversion.reconversion_original = Some("漢字".into());
         assert!(!reconversion.should_request_typo_correction());
+    }
+
+    // 英字の候補だけでも帯を選べ、選ぶと文全体を入力全体で確定する（#26）
+    #[test]
+    fn english_candidate_is_in_assist() {
+        use crate::engine::ipc_service::EnglishCandidate;
+        let mut composition = Composition::default();
+        assert!(!composition.has_assist());
+        composition.candidates.english = vec![EnglishCandidate {
+            text: "今日はgoogleで検索".into(),
+            words: vec!["google".into()],
+            learned: false,
+            corresponding_count: 21,
+        }];
+        assert!(composition.has_assist());
+        assert_eq!(
+            assist_candidate(&composition.candidates, AssistSelection::English(0)),
+            Some(("今日はgoogleで検索".to_string(), 21))
+        );
+    }
+
+    // F10・F6 で覚えるのは、英字だけの 2 文字以上の入力
+    #[test]
+    fn only_alphabetic_input_is_learned() {
+        assert_eq!(word_to_learn("zenzai"), Some("zenzai"));
+        assert_eq!(word_to_learn("Claude"), Some("Claude"));
+        assert_eq!(word_to_learn("a"), None);
+        assert_eq!(word_to_learn("kyouha-"), None);
+        assert_eq!(word_to_learn("2025nen"), None);
+        assert_eq!(word_to_learn(""), None);
     }
 }
