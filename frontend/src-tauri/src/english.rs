@@ -120,7 +120,10 @@ pub fn read_material(
                 let mut bytes = Vec::new();
                 if BufReader::new(file).read_to_end(&mut bytes).is_ok() {
                     done += bytes.len() as u64;
-                    count_words(&clean(&String::from_utf8_lossy(&bytes)), &mut material.counts);
+                    count_words(
+                        &clean(&String::from_utf8_lossy(&bytes)),
+                        &mut material.counts,
+                    );
                 }
             }
         }
@@ -333,7 +336,10 @@ pub fn build_vocabulary(
         .spawn()
         .map_err(|e| {
             cleanup();
-            format!("変換エンジンを起動できませんでした（{}）: {e}", exe.display())
+            format!(
+                "変換エンジンを起動できませんでした（{}）: {e}",
+                exe.display()
+            )
         })?;
     let mut error = None;
     if let Some(stdout) = child.stdout.take() {
@@ -362,7 +368,10 @@ pub fn build_vocabulary(
     if !status.success() {
         cleanup();
         return Err(error.unwrap_or_else(|| {
-            format!("変換エンジンが途中で終わりました（終了コード {:?}）", status.code())
+            format!(
+                "変換エンジンが途中で終わりました（終了コード {:?}）",
+                status.code()
+            )
         }));
     }
     let text = std::fs::read_to_string(&output)
@@ -402,7 +411,9 @@ mod tests {
 
     #[test]
     fn typed_lines_are_detected_by_prompt_source() {
-        assert!(is_typed(r#"{"type":"user","promptSource":"typed","message":{}}"#));
+        assert!(is_typed(
+            r#"{"type":"user","promptSource":"typed","message":{}}"#
+        ));
         assert!(is_typed(r#"{"type":"user","promptSource":"queued"}"#));
         assert!(!is_typed(r#"{"type":"user","promptSource":"sdk"}"#));
         assert!(!is_typed(r#"{"type":"user"}"#));
@@ -411,26 +422,86 @@ mod tests {
     // 覚えた語が先、自分の語彙は回数の多い順。外した語は英字の候補に入れない語へ
     #[test]
     fn word_list_orders_learned_first_and_excludes() {
-        let root = std::env::temp_dir().join(format!("azookey-english-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("azookey-english-test-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let vocabulary = VocabularyFile {
-            words: BTreeMap::from([("claude".into(), 1285), ("opencode".into(), 207), ("kotori".into(), 257)]),
+            words: BTreeMap::from([
+                ("claude".into(), 1285),
+                ("opencode".into(), 207),
+                ("kotori".into(), 257),
+            ]),
             removed: BTreeMap::from([("made".into(), 1)]),
             built_at: "2026-10-11T09:40:00Z".into(),
         };
-        std::fs::write(vocabulary_path(&root), serde_json::to_string(&vocabulary).unwrap()).unwrap();
+        std::fs::write(
+            vocabulary_path(&root),
+            serde_json::to_string(&vocabulary).unwrap(),
+        )
+        .unwrap();
         set_learned(&root, "zenzai", Some(Direction::English)).unwrap();
         set_learned(&root, "Kotori", Some(Direction::Japanese)).unwrap();
         let list = word_list(&root);
-        let english: Vec<(&str, &str)> = list.english.iter().map(|r| (r.word.as_str(), r.source)).collect();
-        assert_eq!(english, vec![("zenzai", "learned"), ("claude", "own"), ("opencode", "own")]);
+        let english: Vec<(&str, &str)> = list
+            .english
+            .iter()
+            .map(|r| (r.word.as_str(), r.source))
+            .collect();
+        assert_eq!(
+            english,
+            vec![
+                ("zenzai", "learned"),
+                ("claude", "own"),
+                ("opencode", "own")
+            ]
+        );
         assert_eq!(list.excluded.len(), 1);
         assert_eq!(list.excluded[0].word, "kotori");
         assert_eq!(list.excluded[0].count, 257);
         assert_eq!(list.vocabulary.as_ref().map(|v| v.words), Some(3));
         // 戻すと、自分の語彙の語として英字の候補に戻る
         set_learned(&root, "kotori", None).unwrap();
-        assert!(word_list(&root).english.iter().any(|r| r.word == "kotori" && r.source == "own"));
+        assert!(word_list(&root)
+            .english
+            .iter()
+            .any(|r| r.word == "kotori" && r.source == "own"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 実際の会話ログと Vault で、自分の語彙を作り直す処理を通しで走らせる（書き先は一時フォルダ。%APPDATA% には書かない）。
+    /// AZOOKEY_SERVER_EXE にビルドした azookey-server.exe を渡す:
+    /// `AZOOKEY_SERVER_EXE=<repo>uildzookey-server.exe cargo test --release -p frontend --lib english_real_run -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn english_real_run() {
+        let started = Instant::now();
+        let files = crate::suggestion::material_files(
+            &crate::suggestion::default_claude_projects(),
+            &PathBuf::from(std::env::var("AZOOKEY_VAULT").unwrap_or_else(|_| r"E:\Obsidian-Vault".to_string())),
+        );
+        let cancel = AtomicBool::new(false);
+        let material = read_material(&files, &cancel, &mut |_, _| {}).unwrap();
+        let read = started.elapsed();
+        println!("files {} / words (3+) {} / japanese runs {} / read {:.1}s", files.len(), material.counts.len(), material.japanese.len(), read.as_secs_f64());
+        let root = std::env::temp_dir().join(format!("azookey-english-real-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut phases = Vec::new();
+        let vocabulary = build_vocabulary(&material, &root, &cancel, &mut |p| {
+            if phases.last() != Some(&p.phase) {
+                phases.push(p.phase.clone());
+            }
+        })
+        .unwrap()
+        .unwrap();
+        println!(
+            "phases {:?} / words {} / removed {} / total {:.1}s",
+            phases,
+            vocabulary.words.len(),
+            vocabulary.removed.len(),
+            started.elapsed().as_secs_f64()
+        );
+        assert!(vocabulary_path(&root).exists());
+        assert!(vocabulary.words.len() > 1000);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

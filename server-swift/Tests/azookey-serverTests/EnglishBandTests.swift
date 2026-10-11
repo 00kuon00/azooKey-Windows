@@ -77,6 +77,13 @@ extension GlobalStateTests {
             #expect(band.first?.correspondingCount == input.count)
             #expect(top == topWithoutEnglish(input), "\(input) のライブ変換の 1 位")
         }
+        // 自分の語彙の語は、子音で終わって入力の終わりにあっても出る（打ちかけの子音とはみなさない）
+        try setOwnWords(["opencode": 207, "github": 297])
+        #expect(type("kyouhagithub").band.map(\.text) == ["今日はgithub"])
+        clear_text()
+        // 打っている途中の子音（kyouh の h）では出さない
+        #expect(type("kyouh").band.isEmpty)
+        clear_text()
         // 同梱の一覧にしか無い、ローマ字として読める語は日本語。帯に英字の候補を出さない
         let (top, band) = type("made")
         #expect(band.isEmpty)
