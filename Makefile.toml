@@ -68,6 +68,8 @@ cp $env:APPDATA/../Local/Programs/Swift/Runtimes/*/usr/bin/* build
 
 cp -Recurse -Force server-swift/azooKey_emoji_dictionary_storage/EmojiDictionary build
 cp -Recurse -Force server-swift/azooKey_dictionary_storage/Dictionary build
+# 日英の自動判定（#26）の同梱の英単語の一覧（SCOWL）と、その著作権表示・許諾文
+cp -Recurse -Force server-swift/EnglishWords build
 
 cp zenz.gguf build
 
