@@ -6,6 +6,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +17,9 @@ use crate::suggestion::{user_texts_from_log_line, Source};
 
 /// 自分の語彙に入れる回数の下限（#17 の登録の提案と同じ）
 pub const MIN_COUNT: usize = 3;
+
+/// 子のプロセスにコンソールの窓を作らせない（Win32 の CREATE_NO_WINDOW）
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 static CODE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)```.*?```").unwrap());
 static INLINE_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`[^`\n]*`").unwrap());
@@ -325,6 +329,8 @@ pub fn build_vocabulary(
         exe_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    // azookey-server.exe はコンソールのプログラムなので、コンソールを持たない配布版の設定アプリから起動すると
+    // 新しいコンソールの窓が開く（閉じると作り直しも止まる）。窓を作らせない
     let mut child = Command::new(&exe)
         .arg("--build-english-vocabulary")
         .arg(&input)
@@ -333,6 +339,7 @@ pub fn build_vocabulary(
         .env("PATH", path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| {
             cleanup();
