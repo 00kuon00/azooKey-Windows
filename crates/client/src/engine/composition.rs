@@ -11,7 +11,7 @@ use super::{
     client_action::{ClientAction, SetSelectionType, SetTextType},
     full_width::{to_fullwidth, to_halfwidth},
     input_mode::InputMode,
-    ipc_service::Candidates,
+    ipc_service::{Candidates, EnglishCandidate},
     segment::moved_segment_len,
     state::IMEState,
     text_util::{to_half_katakana, to_katakana},
@@ -85,10 +85,37 @@ pub fn assist_rows(candidates: &Candidates) -> AssistRows {
     }
 }
 
-/// F10・F6 で直して確定した入力が、覚える語（英字だけの 2 文字以上・#26）ならその語
+/// 覚える語（英字だけの 2 文字以上・#26）ならその語
 pub fn word_to_learn(raw_input: &str) -> Option<&str> {
     (raw_input.chars().count() >= 2 && raw_input.chars().all(|c| c.is_ascii_alphabetic()))
         .then_some(raw_input)
+}
+
+/// 確定したときに覚える語と向き（true なら英字・#26）。`function_key` は確定した文字列を置き換えた F6〜F10（無ければ None）。
+/// F10 は英字に直した入力をそのまま英字の向きで、F6 は帯の英字の候補で英字のまま入れていた語をひらがなの向きで覚える
+/// （zenzaiwotsukau で F6 なら zenzai。入力全体を覚えても、同じ入力でしか効かない）
+pub fn english_words_to_learn(
+    function_key: Option<SetTextType>,
+    raw_input: &str,
+    english: &[EnglishCandidate],
+) -> Vec<(String, bool)> {
+    match function_key {
+        Some(SetTextType::HalfLatin) => word_to_learn(raw_input)
+            .map(|word| vec![(word.to_string(), true)])
+            .unwrap_or_default(),
+        Some(SetTextType::Hiragana) => {
+            let mut words: Vec<(String, bool)> = vec![];
+            for word in english.iter().flat_map(|e| &e.words) {
+                if word_to_learn(word).is_some()
+                    && !words.iter().any(|(w, _)| w.eq_ignore_ascii_case(word))
+                {
+                    words.push((word.clone(), false));
+                }
+            }
+            words
+        }
+        _ => vec![],
+    }
 }
 
 /// 帯で選んでいるものの文字列と、確定したときに使う入力の文字数
@@ -743,20 +770,18 @@ impl TextServiceFactory {
                         }
                     }
                     // F10 で英字に直した語は次から英字の候補の先頭へ、F6 でひらがなに直した英字の候補の語は次から英字の候補に入れない（#26）
-                    let learn = match (converted_by_function_key, last_function_key) {
-                        (true, Some(SetTextType::HalfLatin)) => Some(true),
-                        (true, Some(SetTextType::Hiragana)) if !candidates.english.is_empty() => {
-                            Some(false)
-                        }
-                        _ => None,
+                    let function_key = if converted_by_function_key {
+                        last_function_key
+                    } else {
+                        None
                     };
-                    if let (Some(english), Some(word), true) =
-                        (learn, word_to_learn(&raw_input), learning_allowed)
-                    {
-                        if let Err(error) =
-                            ipc_service.learn_english_word(word.to_string(), english)
+                    if learning_allowed {
+                        for (word, english) in
+                            english_words_to_learn(function_key, &raw_input, &candidates.english)
                         {
-                            tracing::warn!("Failed to learn english word: {error:?}");
+                            if let Err(error) = ipc_service.learn_english_word(word, english) {
+                                tracing::warn!("Failed to learn english word: {error:?}");
+                            }
                         }
                     }
                 }
@@ -953,5 +978,34 @@ mod tests {
         assert_eq!(word_to_learn("kyouha-"), None);
         assert_eq!(word_to_learn("2025nen"), None);
         assert_eq!(word_to_learn(""), None);
+    }
+
+    // F6 で覚えるのは帯の英字の候補で英字のまま入れていた語（入力全体ではない）。F10 は英字に直した入力をそのまま覚える
+    #[test]
+    fn f6_learns_english_words_of_band() {
+        use crate::engine::ipc_service::EnglishCandidate;
+        let english = vec![EnglishCandidate {
+            text: "zenzaiを使う".into(),
+            words: vec!["zenzai".into()],
+            learned: true,
+            corresponding_count: 14,
+        }];
+        assert_eq!(
+            english_words_to_learn(Some(SetTextType::Hiragana), "zenzaiwotsukau", &english),
+            vec![("zenzai".to_string(), false)]
+        );
+        assert_eq!(
+            english_words_to_learn(Some(SetTextType::Hiragana), "kotori", &[]),
+            vec![]
+        );
+        assert_eq!(
+            english_words_to_learn(Some(SetTextType::HalfLatin), "zenzai", &[]),
+            vec![("zenzai".to_string(), true)]
+        );
+        assert_eq!(
+            english_words_to_learn(Some(SetTextType::Katakana), "zenzai", &english),
+            vec![]
+        );
+        assert_eq!(english_words_to_learn(None, "zenzai", &english), vec![]);
     }
 }
