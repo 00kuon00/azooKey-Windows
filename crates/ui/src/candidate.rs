@@ -43,7 +43,7 @@ pub fn create_candidate_window(event_loop: &EventLoop<UserEvent>) -> Result<Wind
 }
 
 pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
-    // 部品の呼び名: #reading（読みの行）・#assist（帯）・#prediction-row（予測）・#typo-row（もしかして）・#candidate-list（変換候補の一覧）
+    // 部品の呼び名: #reading（読みの行）・#assist（帯）・#prediction-row（予測）・#english-row（英字の候補・#26）・#typo-row（もしかして）・#candidate-list（変換候補の一覧）
     let webview_builder = WebViewBuilder::new()
     .with_transparent(true)
     .with_html(
@@ -61,6 +61,7 @@ pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
                         --selected-bg: #D4F0FF;
                         --selected-line: #2CB5FF;
                         --segment: #1C1C1C;
+                        --english: #0B6BCB;
                     }
                     body, html {
                         overscroll-behavior: none;
@@ -122,6 +123,18 @@ pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
                     }
                     .ghost {
                         color: var(--ghost);
+                    }
+                    /* 英字の候補（#english-row）: 見出し「英字」と、英字のまま入れた語の下線 */
+                    .heading-english {
+                        flex: none;
+                        color: var(--english);
+                        font-weight: 700;
+                    }
+                    .english {
+                        color: var(--english);
+                        text-decoration: underline;
+                        text-decoration-thickness: 1.5px;
+                        text-underline-offset: 3px;
                     }
                     /* 帯（予測・もしかして）。Tab で選ぶ */
                     #assist {
@@ -235,6 +248,7 @@ pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
                             --selected-bg: #3949AB;
                             --selected-line: #5C6BC0;
                             --segment: #FFFFFF;
+                            --english: #8CC4FF;
                         }
                         body {
                             color: #FFFFFF;
@@ -255,8 +269,8 @@ pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
                     }
                 </style>
                 <script>
-                    // 直近の表示内容（Rust の view::CandidateView）と、選んでいる場所（SelectionKind: 0 一覧 / 1 予測 / 2 もしかして）
-                    let view = { candidates: [], reading: [], predictions: [], typos: [] };
+                    // 直近の表示内容（Rust の view::CandidateView）と、選んでいる場所（SelectionKind: 0 一覧 / 1 予測 / 2 もしかして / 3 英字）
+                    let view = { candidates: [], reading: [], predictions: [], typos: [], english: [], englishFirst: false };
                     let selection = { kind: 0, index: 0 };
                     let lastHeight = 0;
 
@@ -294,9 +308,18 @@ pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
                         if (prediction && prediction.ghost) inner.appendChild(spans([{ text: prediction.ghost, mark: 'ghost' }]));
                         reading.replaceChildren(inner);
 
-                        // 帯
-                        document.getElementById('assist').hidden = view.predictions.length === 0 && view.typos.length === 0;
+                        // 帯（予測 → 英字 → もしかして。覚えた語を含む英字の候補は先頭）
+                        const assist = document.getElementById('assist');
+                        assist.hidden = view.predictions.length === 0 && view.typos.length === 0 && view.english.length === 0;
                         const predictionRow = assistRow('prediction-row', view.predictions.length, selection.kind === 1);
+                        const englishRow = assistRow('english-row', view.english.length, selection.kind === 3);
+                        const typoRowElement = document.getElementById('typo-row');
+                        assist.insertBefore(englishRow, view.englishFirst ? predictionRow : typoRowElement);
+                        const english = view.english[selection.kind === 3 ? selection.index : 0];
+                        if (english) {
+                            englishRow.querySelector('.text').replaceChildren(spans(english.text));
+                            englishRow.querySelector('.count').textContent = english.learned ? '覚えた語' : '';
+                        }
                         if (prediction) {
                             // 読みで始まる予測は読みの行に続きが出ているので、帯には見出しだけ
                             predictionRow.querySelector('.text').textContent = prediction.ghost ? '予測' : '予測 ' + prediction.text;
@@ -350,6 +373,7 @@ pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
                         // 帯の中身が減ったら、選択は一覧へ戻す（正しい選択は続く updateSelection で届く）
                         if (selection.kind === 1 && selection.index >= view.predictions.length) selection = { kind: 0, index: 0 };
                         if (selection.kind === 2 && selection.index >= view.typos.length) selection = { kind: 0, index: 0 };
+                        if (selection.kind === 3 && selection.index >= view.english.length) selection = { kind: 0, index: 0 };
                         render();
                     }
 
@@ -425,6 +449,7 @@ pub fn create_candidate_webview<'a>() -> Result<WebViewBuilder<'a>> {
                     <div id="reading" hidden></div>
                     <div id="assist" hidden>
                         <div id="prediction-row" class="assist-row" hidden><span class="kbd">Tab</span><span class="text"></span><span class="count"></span></div>
+                        <div id="english-row" class="assist-row" hidden><span class="kbd">Tab</span><span class="heading-english">英字</span><span class="text"></span><span class="count"></span></div>
                         <div id="typo-row" class="assist-row" hidden><span class="kbd">Tab</span><span class="text"></span><span class="count"></span></div>
                     </div>
                     <ol id="candidate-list">

@@ -50,6 +50,53 @@ unsafe extern "C" {
     fn GetPredictions(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
     fn RequestTypoCorrection(lengthPtr: *mut SwiftInt) -> *mut *mut FFICandidate;
     fn CheckConvertibility(queries: *const c_char) -> *mut c_char;
+    fn GetEnglishCandidates() -> *mut c_char;
+    fn LearnEnglishWord(word: *const c_char, english: bool);
+    fn BuildEnglishVocabulary(
+        path: *const c_char,
+        inputPath: *const c_char,
+        outputPath: *const c_char,
+    ) -> bool;
+}
+
+/// 設定画面の「自分の語彙を作り直す」（#26）。常駐の変換エンジンとは別のプロセスで、変換器を作らずに語彙だけ作る。
+/// 使い方: azookey-server.exe --build-english-vocabulary <入力の JSON> <出力の JSON>
+fn build_english_vocabulary(exe_dir: &str, input: &str, output: &str) -> bool {
+    let (Ok(exe_dir), Ok(input), Ok(output)) = (
+        CString::new(exe_dir),
+        CString::new(input),
+        CString::new(output),
+    ) else {
+        return false;
+    };
+    unsafe { BuildEnglishVocabulary(exe_dir.as_ptr(), input.as_ptr(), output.as_ptr()) }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawEnglishCandidate {
+    text: String,
+    words: Vec<String>,
+    learned: bool,
+    corresponding_count: i32,
+}
+
+/// 直近の get_composed_text の入力から作った、帯の英字の候補（Swift 側は JSON で返す）
+fn get_english_candidates() -> Vec<shared::proto::EnglishCandidate> {
+    let json = unsafe {
+        let result = GetEnglishCandidates();
+        CStr::from_ptr(result).to_string_lossy().into_owned()
+    };
+    serde_json::from_str::<Vec<RawEnglishCandidate>>(&json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|candidate| shared::proto::EnglishCandidate {
+            text: candidate.text,
+            words: candidate.words,
+            learned: candidate.learned,
+            corresponding_count: candidate.corresponding_count,
+        })
+        .collect()
 }
 
 #[derive(serde::Deserialize)]
@@ -229,13 +276,14 @@ fn get_predictions() -> Vec<Suggestion> {
         .collect()
 }
 
-/// 候補を変換し直し、予測と合わせて返す
+/// 候補を変換し直し、予測・帯の英字の候補と合わせて返す
 fn composing_text(hiragana: String) -> ComposingText {
     let suggestions = get_composed_text();
     ComposingText {
         hiragana,
         suggestions,
         predictions: get_predictions(),
+        english: get_english_candidates(),
     }
 }
 
@@ -437,6 +485,17 @@ impl AzookeyService for MyAzookeyService {
         ))
     }
 
+    async fn learn_english_word(
+        &self,
+        request: Request<shared::proto::LearnEnglishWordRequest>,
+    ) -> Result<Response<shared::proto::LearnEnglishWordResponse>, Status> {
+        let request = request.into_inner();
+        let word =
+            CString::new(request.word).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        unsafe { LearnEnglishWord(word.as_ptr(), request.english) };
+        Ok(Response::new(shared::proto::LearnEnglishWordResponse {}))
+    }
+
     async fn check_convertibility(
         &self,
         request: Request<shared::proto::CheckConvertibilityRequest>,
@@ -452,10 +511,23 @@ impl AzookeyService for MyAzookeyService {
 // Swift 側の FFI 関数は @MainActor なので、tonic のハンドラを 1 本のスレッドで動かす
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("AzookeyServer started");
     // get executable directory
     let current_exe = std::env::current_exe()?;
     let parent_dir = current_exe.parent().unwrap();
+
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--build-english-vocabulary") {
+        let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
+            eprintln!(
+                "usage: azookey-server.exe --build-english-vocabulary <input.json> <output.json>"
+            );
+            std::process::exit(2);
+        };
+        let ok = build_english_vocabulary(parent_dir.to_str().unwrap(), input, output);
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
+    println!("AzookeyServer started");
     initialize(parent_dir.to_str().unwrap());
 
     let service = MyAzookeyService::default();

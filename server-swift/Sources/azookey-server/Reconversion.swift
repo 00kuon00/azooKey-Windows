@@ -71,6 +71,42 @@ struct ReadingIndex {
         return result
     }
 
+    /// 多くの表層形をまとめて引く（日英の自動判定の語彙作り・評価で、会話ログの日本語の部分に読みを付ける・#26）。
+    /// `lookup` は語ごとに表層形の全位置と比べるので、表層形が長いと遅い。ここでは表層形の部分文字列のうち
+    /// 漢字を含み `maxWordLength` 文字までのものを先に集めておき、辞書の各語をその中から探す。
+    /// 返り値は表層形ごとの `lookup` と同じ形の答え
+    func lookupMany(_ surfaces: [String], maxWordLength: Int = 16) -> [String: [Range<Int>: [(reading: String, value: Float)]]] {
+        let unique = Array(Set(surfaces))
+        var positions: [[UInt8]: [(surface: Int, range: Range<Int>)]] = [:]
+        for (index, surface) in unique.enumerated() {
+            let characters = Array(surface)
+            for start in characters.indices {
+                var bytes: [UInt8] = []
+                var hasKanji = false
+                for end in (start + 1)...min(characters.count, start + maxWordLength) {
+                    bytes += String(characters[end - 1]).utf8
+                    hasKanji = hasKanji || isKanjiForReading(characters[end - 1])
+                    // かなだけの語は読みをそのまま使えるので要らない
+                    if hasKanji {
+                        positions[bytes, default: []].append((index, start..<end))
+                    }
+                }
+            }
+        }
+        var matches = Array(repeating: [Range<Int>: [(reading: String, value: Float)]](), count: unique.count)
+        for file in files {
+            file.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                Self.scan(buffer) { reading, value, word in
+                    guard let hits = positions[Array(word)] else { return }
+                    for hit in hits {
+                        matches[hit.surface][hit.range, default: []].append((reading(), value))
+                    }
+                }
+            }
+        }
+        return Dictionary(uniqueKeysWithValues: zip(unique, matches))
+    }
+
     /// loudstxt3 の全行を走査する。形式は変換エンジンの `LOUDS.parseBinary` と同じ:
     /// 先頭に UInt16 の区画数と UInt32 の区画の開始位置、各区画は UInt16 の行数・行ごとに 10 バイト
     /// （lcid・rcid・mid が UInt16、重みが Float32）・タブ区切りの文字列（先頭が読み、続いて行ごとの語。空なら読みと同じ）

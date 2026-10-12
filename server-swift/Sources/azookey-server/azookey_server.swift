@@ -70,6 +70,8 @@ func defaultMemoryDirectoryURL() -> URL {
     // 同じ場所に作り直すので、forceReload で読み込み済みの辞書を捨てさせる
     converter.updateUserDictionaryURL(userDictionaryURL, forceReload: true)
     converter.stopComposition()
+    englishConverter?.updateUserDictionaryURL(userDictionaryURL, forceReload: true)
+    englishConverter?.stopComposition()
 }
 
 func parseLearningType(_ mode: String) -> LearningType? {
@@ -194,6 +196,10 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
             // learning が無い（古い settings.json）ときは既定の「学習する」
             let learningDict = json?["learning"] as? [String: Any]
             learningType = (learningDict?["mode"] as? String).flatMap(parseLearningType) ?? .inputAndOutput
+
+            // 日英の自動判定（#26）。english が無い（古い settings.json）ときは既定の ON
+            let englishDict = json?["english"] as? [String: Any]
+            englishEnabled = (englishDict?["enable"] as? Bool) ?? true
         } catch {
             print("Failed to read settings: \(error)")
         }
@@ -201,6 +207,7 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
     // Initialize の中では変換器を作る前に呼ばれる。そのときは変換器を作ったあとで読む
     if converter != nil {
         reloadUserDictionary()
+        reloadEnglishLexicon()
     }
 }
 
@@ -222,8 +229,16 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
         preloadDictionary: true
     )
     reloadUserDictionary()
+    reloadEnglishLexicon()
     composingText.insertAtCursorPosition("a", inputStyle: .roman2kana)
     converter.requestCandidates(composingText, options: getOptions())
+    // 帯の英字の候補の変換器も、最初の打鍵で辞書を読み込まないよう先に作っておく
+    if englishEnabled {
+        var options = getOptions()
+        options.zenzaiMode = .off
+        _ = englishBandConverter().requestCandidates(composingText, options: options)
+        englishConverter?.stopComposition()
+    }
     composingText = ComposingText()
 }
 
@@ -270,7 +285,9 @@ func constructCandidateString(candidate: Candidate, hiragana: String) -> String 
     lastCandidates = []
     lastPredictions = []
     lastTypoCorrections = []
+    lastEnglishCandidates = []
     segmentSurfaceCount = nil
+    englishConverter?.stopComposition()
     // 入力の区切り。前の入力で確定した語を、次の入力の学習の「直前の語」に持ち越さない
     // （前回の変換結果も捨てる。Zenzai の llama context は作り直さない版のエンジンを使っている・#13）
     converter.stopComposition()
@@ -532,6 +549,10 @@ func shouldLearn(_ text: String) -> Bool {
 @_silgen_name("CommitCandidate")
 @MainActor public func commit_candidate(text: UnsafePointer<CChar>) {
     let text = String(cString: text)
+    // 帯の英字の候補なら、英字のまま入れた語を覚える（変換の学習はしない）
+    if commitEnglishCandidate(text) {
+        return
+    }
     // 「新しく学習しない」「学習しない」では学習の保存先に書き込まない
     guard learningType == .inputAndOutput, shouldLearn(text) else {
         return

@@ -68,6 +68,9 @@ cp $env:APPDATA/../Local/Programs/Swift/Runtimes/*/usr/bin/* build
 
 cp -Recurse -Force server-swift/azooKey_emoji_dictionary_storage/EmojiDictionary build
 cp -Recurse -Force server-swift/azooKey_dictionary_storage/Dictionary build
+# Bundled English word list (SCOWL) and its copyright notice for #26. Keep this comment ASCII:
+# Windows PowerShell 5.1 reads this BOM-less script as cp932, and a Japanese comment swallows the next line.
+cp -Recurse -Force server-swift/EnglishWords build
 
 cp zenz.gguf build
 

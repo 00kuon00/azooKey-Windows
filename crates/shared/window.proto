@@ -21,6 +21,13 @@ message TypoCandidate {
   string hiragana = 2; // 直した読み
 }
 
+// 帯の英字の候補（#english-row に出す・日英の自動判定 #26）
+message EnglishCandidateView {
+  string text = 1;           // 文全体
+  repeated string words = 2; // 英字のまま入れた語（印を付ける）
+  bool learned = 3;          // 覚えた語を含む（帯の先頭に出す）
+}
+
 // 変換候補を送るメッセージ
 message SetCandidateRequest {
   repeated string candidates = 1;
@@ -32,6 +39,10 @@ message SetCandidateRequest {
   repeated string predictions = 4;
   // 打ち間違いを直した「もしかして」（#typo-row）
   repeated TypoCandidate typo_corrections = 5;
+  // 英字の候補（#english-row）
+  repeated EnglishCandidateView english = 6;
+  // 英字の候補の行を帯の先頭に置くか（false なら 予測 → 英字 → もしかして）。Tab の順と同じにするためクライアントが決める
+  bool english_first = 7;
 }
 
 // どこの候補を選んでいるか
@@ -39,6 +50,7 @@ enum SelectionKind {
   CANDIDATE = 0;  // 変換候補の一覧（#candidate-list）
   PREDICTION = 1; // 予測（#prediction-row）
   TYPO = 2;       // もしかして（#typo-row）
+  ENGLISH = 3;    // 英字の候補（#english-row）
 }
 
 // 変換候補を選択するメッセージ

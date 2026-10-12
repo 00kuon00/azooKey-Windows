@@ -44,6 +44,18 @@ impl Default for LearningConfig {
     }
 }
 
+// 日英の自動判定（#26）。enable なら、英単語を英字のまま入れた文を帯の候補に出す
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct EnglishConfig {
+    pub enable: bool,
+}
+
+impl Default for EnglishConfig {
+    fn default() -> Self {
+        EnglishConfig { enable: true }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AppConfig {
     pub version: String,
@@ -51,6 +63,9 @@ pub struct AppConfig {
     // 学習の設定が無い古い settings.json も読めるようにする
     #[serde(default)]
     pub learning: LearningConfig,
+    // 日英の自動判定の設定が無い古い settings.json は既定（ON）
+    #[serde(default)]
+    pub english: EnglishConfig,
 }
 
 impl Default for AppConfig {
@@ -63,6 +78,7 @@ impl Default for AppConfig {
                 backend: "cpu".to_string(),
             },
             learning: LearningConfig::default(),
+            english: EnglishConfig::default(),
         }
     }
 }
