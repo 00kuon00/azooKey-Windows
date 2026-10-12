@@ -484,13 +484,22 @@ mod tests {
         let started = Instant::now();
         let files = crate::suggestion::material_files(
             &crate::suggestion::default_claude_projects(),
-            &PathBuf::from(std::env::var("AZOOKEY_VAULT").unwrap_or_else(|_| r"E:\Obsidian-Vault".to_string())),
+            &PathBuf::from(
+                std::env::var("AZOOKEY_VAULT").unwrap_or_else(|_| r"E:\Obsidian-Vault".to_string()),
+            ),
         );
         let cancel = AtomicBool::new(false);
         let material = read_material(&files, &cancel, &mut |_, _| {}).unwrap();
         let read = started.elapsed();
-        println!("files {} / words (3+) {} / japanese runs {} / read {:.1}s", files.len(), material.counts.len(), material.japanese.len(), read.as_secs_f64());
-        let root = std::env::temp_dir().join(format!("azookey-english-real-{}", std::process::id()));
+        println!(
+            "files {} / words (3+) {} / japanese runs {} / read {:.1}s",
+            files.len(),
+            material.counts.len(),
+            material.japanese.len(),
+            read.as_secs_f64()
+        );
+        let root =
+            std::env::temp_dir().join(format!("azookey-english-real-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut phases = Vec::new();
         let vocabulary = build_vocabulary(&material, &root, &cancel, &mut |p| {
