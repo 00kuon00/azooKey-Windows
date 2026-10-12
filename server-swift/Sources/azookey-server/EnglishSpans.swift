@@ -166,7 +166,7 @@ func englishSpans(in input: String, lexicon: EnglishLexicon, complete: Bool = fa
     }
     // 全体が日本語として読める（英字が残らない）なら、同梱の一覧・一覧に無い語の候補は点が正のままで選ばれないので作らない
     let wholeReading = readRomaji(String(characters), pendingTail: !complete)
-    let candidates = englishCandidates(characters, lexicon: lexicon, ownWordsOnly: wholeReading.leftover == 0)
+    let candidates = englishCandidates(characters, lexicon: lexicon, ownWordsOnly: wholeReading.leftover == 0, pendingTail: !complete)
     guard !candidates.isEmpty else {
         return []
     }
@@ -257,13 +257,18 @@ func englishSpans(in input: String, lexicon: EnglishLexicon, complete: Bool = fa
 }
 
 /// 英単語の区間の候補と、その点（境目の点は含まない）。
-/// `ownWordsOnly` なら、自分の語彙・F10 で直した語・大文字の並びだけ
-func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWordsOnly: Bool = false) -> [EnglishCandidate] {
+/// `ownWordsOnly` なら、自分の語彙・F10 で直した語・大文字の並びだけ。
+/// `pendingTail`（打っている途中）なら、入力の終わりの母音を含まない英字（zenzaiw の w）は打ちかけとみなす
+func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWordsOnly: Bool = false, pendingTail: Bool = false) -> [EnglishCandidate] {
     let weights = lexicon.weights
     var candidates: [EnglishCandidate] = []
     // F6 でひらがなに直した語が出てくる位置。そこにかかる候補は、一覧に無い語の候補も含めて作らない
     var japaneseRanges: [Range<Int>] = []
     let isLetter = { (c: Character) in c.isASCII && c.isLetter }
+    // end から入力の終わりまでが打ちかけの子音か（readRomaji の pendingTail が残りに数えないもの）
+    let isPendingTail = { (end: Int) in
+        pendingTail && characters[end...].allSatisfy { isLetter($0) && !"aiueo".contains($0.lowercased()) }
+    }
     for start in characters.indices where isLetter(characters[start]) {
         var word = ""
         var end = start
@@ -278,8 +283,9 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
                 continue
             case .english:
                 // 覚えた語の点は境目の点が無くても全部を日本語として読む区切り（0）に勝つので、語の途中で切れるところでは
-                // 取らない（ok を覚えても okane は お金・made を覚えても yamadesu は 山です）
-                if canEndEnglishWord(characters, at: end) {
+                // 取らない（ok を覚えても okane は お金・made を覚えても yamadesu は 山です）。
+                // 打ちかけの子音の前（zenzaiw）は、助詞が揃うまでの間に帯が消えないよう取る
+                if canEndEnglishWord(characters, at: end) || isPendingTail(end) {
                     candidates.append(EnglishCandidate(range: range, cost: weights.learnedEnglish))
                 }
                 continue

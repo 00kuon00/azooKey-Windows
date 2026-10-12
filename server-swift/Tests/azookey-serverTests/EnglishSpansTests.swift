@@ -60,6 +60,10 @@ import KanaKanjiConverterModule
         #expect(spans("okdesu", learned: learned) == ["ok"])
         #expect(spans("zenzaiwotsukau", learned: ["zenzai": .english]) == ["zenzai"])
         #expect(spans("gltffairu", learned: ["gltf": .english]) == ["gltf"])
+        // 打っている途中の子音（zenzaiw の w）は打ちかけなので、助詞が揃うまでの間も帯から消さない
+        for input in ["zenzaiw", "zenzaits"] {
+            #expect(spans(input, learned: ["zenzai": .english]) == ["zenzai"], "\(input)")
+        }
     }
 
     // 日本語として読めるところに、英語の語が埋まっていても取らない
