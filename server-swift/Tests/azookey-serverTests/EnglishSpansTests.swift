@@ -49,6 +49,19 @@ import KanaKanjiConverterModule
         #expect(spans("claude", learned: ["claude": .japanese]) == [])
     }
 
+    // F10 で覚えた語も、後ろが入力の終わり・助詞・子音の続くところでだけ英単語にする
+    // （ok を覚えても okane は お金。語の途中で切れる区切りに覚えた語の点を付けない）
+    @Test func learnedWordNeedsWordEnd() {
+        let learned: [String: EnglishDirection] = ["ok": .english, "ai": .english, "ng": .english, "made": .english]
+        for input in ["okane", "aiteiru", "sangatsu", "yamadesu"] {
+            #expect(spans(input, learned: learned) == [], "\(input)")
+        }
+        #expect(spans("ok", learned: learned) == ["ok"])
+        #expect(spans("okdesu", learned: learned) == ["ok"])
+        #expect(spans("zenzaiwotsukau", learned: ["zenzai": .english]) == ["zenzai"])
+        #expect(spans("gltffairu", learned: ["gltf": .english]) == ["gltf"])
+    }
+
     // 日本語として読めるところに、英語の語が埋まっていても取らない
     @Test func wordEmbeddedInJapaneseIsNotTaken() {
         #expect(spans("konotekisuto", own: ["note"]) == [])

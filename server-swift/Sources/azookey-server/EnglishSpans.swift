@@ -131,6 +131,22 @@ func isReadableAsRomaji(_ word: String) -> Bool {
     romajiLeftover(word) == 0
 }
 
+/// `characters` の `end` の前で英単語を終われるか。入力の終わり・英字でない文字の前・助詞のローマ字の前・
+/// 子音のあとに子音が続くところ（gltf + ふぁいる。ch・sh・th・ts の間は次の母音と組んでひとつのかなになるので切らない）
+func canEndEnglishWord(_ characters: [Character], at end: Int) -> Bool {
+    guard end < characters.count, characters[end].isASCII, characters[end].isLetter else {
+        return true
+    }
+    if particleRomaji.contains(where: { particle in
+        end + particle.count <= characters.count && characters[end..<(end + particle.count)].elementsEqual(particle)
+    }) {
+        return true
+    }
+    let last = Character(characters[end - 1].lowercased())
+    let next = Character(characters[end].lowercased())
+    return !"aiueon".contains(last) && !"aiueoy".contains(next) && next != "h" && !(last == "t" && next == "s")
+}
+
 /// 英単語の区間の候補
 struct EnglishCandidate {
     var range: Range<Int>
@@ -261,7 +277,11 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
                 japaneseRanges.append(range)
                 continue
             case .english:
-                candidates.append(EnglishCandidate(range: range, cost: weights.learnedEnglish))
+                // 覚えた語の点は境目の点が無くても全部を日本語として読む区切り（0）に勝つので、語の途中で切れるところでは
+                // 取らない（ok を覚えても okane は お金・made を覚えても yamadesu は 山です）
+                if canEndEnglishWord(characters, at: end) {
+                    candidates.append(EnglishCandidate(range: range, cost: weights.learnedEnglish))
+                }
                 continue
             case nil:
                 break
@@ -284,7 +304,6 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
     if lexicon.unknownWords && !ownWordsOnly {
         let knownRanges = candidates.map(\.range)
         let known = Set(knownRanges)
-        let isVowelOrY = { (c: Character) in "aiueoy".contains(c.lowercased()) }
         for start in characters.indices where isLetter(characters[start]) {
             if start > 0, isLetter(characters[start - 1]), !"aiueon".contains(characters[start - 1]) {
                 continue
@@ -293,19 +312,7 @@ func englishCandidates(_ characters: [Character], lexicon: EnglishLexicon, ownWo
             while end < characters.count, end - start < maxEnglishWordLength, isLetter(characters[end]) {
                 end += 1
                 let range = start..<end
-                let atEnd = end == characters.count || !isLetter(characters[end])
-                let beforeParticle = particleRomaji.contains { particle in
-                    end + particle.count <= characters.count
-                        && characters[end..<(end + particle.count)].elementsEqual(particle)
-                }
-                // ch・sh・th・ts の間では切らない（次の母音と組んでひとつのかなになる）
-                var betweenConsonants = false
-                if !atEnd {
-                    let last = Character(characters[end - 1].lowercased())
-                    let next = Character(characters[end].lowercased())
-                    betweenConsonants = !"aiueon".contains(last) && !isVowelOrY(next) && next != "h" && !(last == "t" && next == "s")
-                }
-                guard atEnd || beforeParticle || betweenConsonants, !known.contains(range) else { continue }
+                guard canEndEnglishWord(characters, at: end), !known.contains(range) else { continue }
                 guard !knownRanges.contains(where: { known in
                     (known.lowerBound < range.lowerBound && range.lowerBound < known.upperBound)
                         || (known.lowerBound == range.lowerBound && range.upperBound < known.upperBound)
