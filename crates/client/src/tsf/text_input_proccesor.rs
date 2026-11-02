@@ -33,14 +33,14 @@ impl ITfTextInputProcessor_Impl for TextServiceFactory_Impl {
         dll_instance.add_ref();
 
         // initialize ipc_service
-        if let Ok(mut ipc_service) = ipc_service::IPCService::new() {
-            ipc_service.append_text("".to_string())?;
+        // つながらなくても（ログオン直後でエンジンがまだパイプを作っていない・#36）ここで抜けない。
+        // 抜けるとキーの受け取りも言語バーも登録されず、そのスレッドでは IME が無反応のままになる。
+        // Activate() should not return an error
+        // if Activate() returns an error, the icon of the previously activated TextService will be displayed, which may confuse the user
+        if let Some(ipc_service) = ipc_service::IPCService::connect() {
             IMEState::get()?.ipc_service = Some(ipc_service);
         } else {
-            // Activate() should not return an error
-            // if Activate() returns an error, the icon of the previously activated TextService will be displayed, which may confuse the user
-            tracing::error!("Failed to initialize IPC service");
-            return Ok(());
+            tracing::error!("Failed to initialize IPC service; will reconnect on key input");
         }
 
         let mut text_service = self.borrow_mut()?;

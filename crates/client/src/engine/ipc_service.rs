@@ -151,6 +151,24 @@ impl IPCService {
     }
 }
 
+impl IPCService {
+    // つないで最初の要求（空の append_text）まで通ったら返す。どちらかが失敗したら None（つながらなかった）
+    pub fn connect() -> Option<Self> {
+        let connected = Self::new().and_then(|mut ipc_service| {
+            ipc_service.append_text("".to_string())?;
+            Ok(ipc_service)
+        });
+
+        match connected {
+            Ok(ipc_service) => Some(ipc_service),
+            Err(error) => {
+                tracing::warn!("Failed to connect to the server: {error:?}");
+                None
+            }
+        }
+    }
+}
+
 // implement methods to interact with kkc server
 impl IPCService {
     #[tracing::instrument]
