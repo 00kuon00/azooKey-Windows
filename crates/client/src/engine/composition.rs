@@ -535,10 +535,9 @@ impl TextServiceFactory {
         let mut reconversion_original = composition.reconversion_original.clone();
         let mut assist = composition.assist;
         let mut segment_length = composition.segment_length;
-        let mut ipc_service = IMEState::get()?
-            .ipc_service
-            .clone()
-            .context("ipc_service is None")?;
+        // Activate のときにつながらなかった（ログオン直後・#36）なら、ここでつなぎ直す
+        let mut ipc_service =
+            IMEState::ipc_service_or_reconnect()?.context("ipc_service is None")?;
         let mut transition = transition;
 
         self.update_context(&preview)?;
